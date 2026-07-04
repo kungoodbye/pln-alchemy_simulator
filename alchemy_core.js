@@ -134,7 +134,7 @@ function getAdvancedAlchemyLevelRange(level1, level2, book = 0) {
 }
 
 function isEquipmentCandidate(item) {
-    return Boolean(item && item.req_level > 0 && item.type && item.category);
+    return Boolean(item && item.type && item.category);
 }
 
 function queryEquipmentItems(filters = {}) {
@@ -365,15 +365,15 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     if (candidates.length === 0) return 0;
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);
+    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     let targetProb = 0;
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - (L_min + B);
-        const prob = getDeltaProb(delta);
+        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
         const validCandidates = levelToCandidates[L];
@@ -390,16 +390,16 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
 }
 
 // Jump probabilities table:
-function getDeltaProb(delta) {
+function getDeltaProb(delta, downgradeRange = 7) {
     if (delta === 4) return 0.10;
     if (delta === 3) return 0.25;
     if (delta === 2) return 0.30;
     if (delta === 1) return 0.15;
     if (delta === 0) return 0.15;
     if (delta < 0) {
-        return 0.05 / 7;
+        return 0.05 / downgradeRange; // 5% spread across actual downgrade levels
     }
-    return 0;
+    return 0; // delta > 4: encyclopedia-extended levels, TBD
 }
 
 // Map output level to candidates with fallback handling
@@ -452,15 +452,15 @@ function getRecipeOutcomeBreakdown(recipe, targetItem = null) {
     if (candidates.length === 0) return "";
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);
+    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     const itemProbabilities = {};
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - (L_min + B);
-        const prob = getDeltaProb(delta);
+        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
         const validCandidates = levelToCandidates[L];
@@ -1222,15 +1222,15 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     if (candidates.length === 0) return [];
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);
+    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     const itemProbabilities = {};
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - (L_min + B);
-        const prob = getDeltaProb(delta);
+        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
         const validCandidates = levelToCandidates[L];
