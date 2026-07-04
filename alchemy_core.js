@@ -122,13 +122,21 @@ function normalizeCraftItemName(name) {
     return CRAFT_NAME_ALIASES[name] || name;
 }
 
-function getAdvancedAlchemyLevelRange(level1, level2, book = 0) {
+function getAdvancedAlchemyLevelRange(level1, level2, book = 0, secondaryItem = null) {
+    // Level-down with 属性杂物: narrow range to avoid unwanted equipment
+    if (secondaryItem && secondaryItem.name && secondaryItem.name.includes("属性杂物")) {
+        const baseLevel = Math.min(level1, level2);
+        const bookBonus = book === 0 ? 0 : book + 1;
+        return {
+            min: 2,
+            max: baseLevel + ADVANCED_ALCHEMY_BASE_BONUS - 1 + bookBonus
+        };
+    }
+    // Normal alchemy range
     const baseLevel = Math.min(level1, level2);
-    // L_base >= 8: downgrade up to 7 levels
-    // L_base < 8:  downgrade up to 3 levels (game-verified, e.g. 5+5 → range 2-9)
     const downgradeRange = baseLevel >= 8 ? 7 : 3;
     return {
-        min: Math.max(1, baseLevel - downgradeRange),
+        min: Math.max(2, baseLevel - downgradeRange),
         max: baseLevel + ADVANCED_ALCHEMY_BASE_BONUS + book
     };
 }
@@ -1170,11 +1178,10 @@ function getAlchemyResultCandidatesMulti(ingredients, book = 0) {
     
     const levels = ingredients.map(item => item.level);
     const L_min = Math.min(...levels);
-    
-    const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min - downgradeRange);
-    const maxLevel = L_min + 4 + book;
-    
+    const range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, book);
+    const minLevel = range.min;
+    const maxLevel = range.max;
+
     const inputMaterials = ingredients.map(item => String(item.material || "").trim()).filter(Boolean);
     const secondaryMaterials = inputMaterials.slice(1); // Non-primary materials
 
@@ -1224,11 +1231,11 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     
     const candidates = getAlchemyResultCandidatesMulti(ingredients, B);
     if (candidates.length === 0) return [];
-    
-    const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
-    const maxLevel = L_min + B + 4;
-    
+
+    const range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, B);
+    const minLevel = range.min;
+    const maxLevel = range.max;
+
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     const itemProbabilities = {};
