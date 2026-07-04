@@ -14,23 +14,13 @@ document.addEventListener("DOMContentLoaded", () => {
     initSimulator();
 });
 
-async function initSimulator() {
-    // Load database via fetch (with local fallback)
+function initSimulator() {
     if (window.alchemy_db) {
         dbItems = window.alchemy_db;
         console.log(`Simulator DB Loaded: ${dbItems.length} items.`);
         populateModalFilters();
     } else {
-        try {
-            const resp = await fetch("alchemy_db.json");
-            dbItems = await resp.json();
-            window.alchemy_db = dbItems;
-            console.log(`Simulator DB Fetched: ${dbItems.length} items.`);
-            populateModalFilters();
-        } catch (e) {
-            showConsoleLog("系统错误: 无法载入物品数据库！", "fail");
-            console.error(e);
-        }
+        showConsoleLog("系统错误: 无法载入物品数据库！", "fail");
     }
 
     // Load local history
