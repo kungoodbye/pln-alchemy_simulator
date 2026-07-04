@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飘流新世界 - 炼金合成数据学习</title>
+    <link rel="stylesheet" href="style.css?v=1.0.1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        /* Extra styles specific to upload page */
+        .upload-main {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 30px;
+        }
+        @media (max-width: 900px) {
+            .upload-main {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Dropzone area */
+        .dropzone-container {
+            border: 2px dashed rgba(255, 215, 0, 0.3);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+        .dropzone-container:hover, .dropzone-container.dragover {
+            border-color: var(--gold);
+            background: rgba(255, 215, 0, 0.03);
+            box-shadow: 0 0 15px var(--gold-glow);
+        }
+        .dropzone-icon {
+            font-size: 3rem;
+            opacity: 0.6;
+            animation: bounce 2s infinite;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+        .dropzone-text {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        .preview-img {
+            max-width: 100%;
+            max-height: 180px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: none;
+        }
+        
+        /* Form item auto-complete inputs */
+        .form-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .form-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+        }
+        .form-row label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        .form-row input, .form-row select {
+            background: #19202c;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 10px 15px;
+            font-size: 0.88rem;
+            width: 100%;
+        }
+        .form-row input:focus {
+            border-color: var(--gold);
+            outline: none;
+            box-shadow: 0 0 5px var(--gold-glow);
+        }
+        .input-badge {
+            position: absolute;
+            right: 12px;
+            background: rgba(255, 215, 0, 0.1);
+            border: 1px solid rgba(255, 215, 0, 0.2);
+            color: var(--gold);
+            font-size: 0.72rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 700;
+            pointer-events: none;
+            display: none;
+        }
+        
+        /* Dropdown suggestions specific to form fields */
+        .form-suggestions {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            width: 100%;
+            background: #141a24;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            border-radius: 8px;
+            z-index: 100;
+            max-height: 180px;
+            overflow-y: auto;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            display: none;
+        }
+        .form-suggestion-item {
+            padding: 8px 12px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+        .form-suggestion-item:hover {
+            background: rgba(255, 215, 0, 0.08);
+            color: #ffffff;
+        }
+        
+        /* Upload Status steps */
+        .progress-box {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 15px;
+            font-size: 0.8rem;
+            display: none;
+        }
+        .progress-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .progress-step.active {
+            color: var(--gold);
+            font-weight: 600;
+        }
+        .progress-step.done {
+            color: var(--success);
+        }
+        
+        /* Comparison result tags */
+        .tag-model-status {
+            font-size: 0.72rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 700;
+            display: inline-block;
+        }
+        .tag-in-model {
+            background: rgba(163, 190, 140, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(163, 190, 140, 0.3);
+        }
+        .tag-new-formula {
+            background: rgba(142, 68, 173, 0.15);
+            color: #d08770;
+            border: 1px solid rgba(142, 68, 173, 0.3);
+        }
+        
+        /* Collected records grid */
+        .record-card-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            max-height: 580px;
+            overflow-y: auto;
+        }
+        .record-item-card {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 15px;
+            display: grid;
+            grid-template-columns: 80px 1fr 110px;
+            gap: 15px;
+            align-items: center;
+        }
+        .record-thumb {
+            width: 80px;
+            height: 60px;
+            border-radius: 6px;
+            object-fit: cover;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: transform 0.2s ease;
+        }
+        .record-thumb:hover {
+            transform: scale(1.08);
+        }
+        .record-info {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .record-formula {
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+        .record-formula span.item-hl {
+            color: var(--gold);
+        }
+        .record-desc {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+        .record-status-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="stars-bg"></div>
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-logo">
+                <div class="alchemy-icon">🧪</div>
+                <h1>飘流新世界 <span>合成截图收集与学习</span></h1>
+            </div>
+            <p class="subtitle">上传炼金配方合成截图（含配方配比），数据会自动对比现有概率模型，用于系统的自动化纠偏与配方学习。</p>
+            <div class="header-actions">
+                <a href="index.html" class="nav-back-btn">← 返回合成模拟器</a>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="app-main upload-main">
+            <!-- Left Side: Upload Image & Fill Form -->
+            <section class="panel-left">
+                <div class="card">
+                    <h2><span class="icon">📤</span> 上传与结构化标注</h2>
+                    
+                    <!-- File dropzone -->
+                    <div class="dropzone-container" id="dropzone" onclick="document.getElementById('file-input').click()">
+                        <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+                        <div class="dropzone-icon" id="dropzone-icon">📷</div>
+                        <div class="dropzone-text" id="dropzone-text">点击、拖拽或直接 <b>Ctrl + V 粘贴</b> 合成截图到此处</div>
+                        <img class="preview-img" id="upload-preview" alt="预览">
+                    </div>
+
+                    <!-- Upload progress -->
+                    <div class="progress-box" id="upload-progress-box">
+                        <div class="progress-step" id="step-loading" style="color: var(--gold)">⏳ 正在上传并同步至腾讯云 COS，请稍候...</div>
+                    </div>
+
+                    <!-- Action Button -->
+                    <button type="button" class="btn-synthesize" id="btn-submit-upload" onclick="startUploadAndRecord()" style="margin-top:20px;">
+                        ⚡ 开始直传照片
+                    </button>
+                </div>
+            </section>
+
+            <!-- Right Side: Collected Logs Compare -->
+            <section class="panel-right">
+                <div class="card right-panel-content">
+                    <h2><span class="icon">🖼️</span> 已经收录的合成截图</h2>
+                    
+                    <div class="prediction-list-wrap" style="max-height:550px;">
+                        <div class="prediction-empty-state" id="records-empty" style="display:none">
+                            <div class="empty-icon">📂</div>
+                            <p>服务器还没有收集到任何数据记录</p>
+                        </div>
+                        <div class="record-card-list" id="records-container">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal for large image view -->
+    <div class="modal-backdrop hidden" id="img-modal" onclick="closeImgModal()">
+        <img src="" id="modal-large-img" style="max-width:90%; max-height:90vh; border:2px solid var(--gold); border-radius:12px; box-shadow:0 0 30px rgba(0,0,0,0.8)">
+    </div>
+
+    <!-- JS dependencies -->
+    <script src="upload.js?v=1.0.1"></script>
+</body>
+</html>

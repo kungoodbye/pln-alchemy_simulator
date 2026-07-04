@@ -1,0 +1,34 @@
+# 腾讯云 COS 密钥 — 绝对不可提交
+uploader_service/config.json
+
+# 生产数据库 — 含用户上传数据
+uploader_service/uploads.json
+
+# Python 生成文件
+uploader_service/prompt.txt
+uploader_service/results.json
+uploader_service/results_imported.json
+uploader_service/__pycache__/
+*.pyc
+
+# Go 编译产物
+uploader_service/uploader_service.exe
+uploader_service/vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (如果有)
+node_modules/
+
+# 临时文件
+*.tmp
+*.log

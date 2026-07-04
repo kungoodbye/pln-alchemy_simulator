@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飘流新世界 - 炼金合成模拟器</title>
+    <link rel="stylesheet" href="style.css?v=1.0.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="stars-bg"></div>
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-logo">
+                <div class="alchemy-icon">🔮</div>
+                <h1>飘流新世界 <span>炼金合成模拟器</span></h1>
+            </div>
+            <p class="subtitle">高度仿真游戏内炼金合成机制，实时进行概率预测、单次模拟与连续合成统计</p>
+            <div class="header-actions" style="display: flex; gap: 10px;">
+                <a href="upload.html" class="nav-back-btn" style="border-color: var(--violet); color: #eed8a1;">📤 上传合成截图</a>
+                <a href="../index.html" class="nav-back-btn">← 返回配方寻路器</a>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="app-main">
+            <!-- Left Side: Pentagram and Cauldron -->
+            <section class="panel-left">
+                <div class="card simulator-card">
+                    <!-- Angel Guide Badge -->
+                    <div class="guide-badge">
+                        <div class="angel-avatar">👼</div>
+                        <div class="guide-info">
+                            <span class="guide-title">高阶炼金术Lv 12</span>
+                            <span class="guide-next">NEXT 851</span>
+                        </div>
+                    </div>
+
+                    <!-- Synthesis Magic Circle Arena -->
+                    <div class="alchemy-arena">
+                        <!-- Connecting Pentagram Star Lines (SVG) -->
+                        <svg class="pentagram-svg" viewBox="0 0 400 400">
+                            <defs>
+                                <filter id="gold-glow" x="-20%" y="-20%" width="140%" height="140%">
+                                    <feGaussianBlur stdDeviation="6" result="blur" />
+                                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                                </filter>
+                                <filter id="fire-glow" x="-20%" y="-20%" width="140%" height="140%">
+                                    <feGaussianBlur stdDeviation="8" result="blur" />
+                                    <feComponentTransfer in="blur" result="brightBlur">
+                                        <feFuncA type="linear" slope="2" />
+                                    </feComponentTransfer>
+                                    <feMerge>
+                                        <feMergeNode in="brightBlur" />
+                                        <feMergeNode in="SourceGraphic" />
+                                    </feMerge>
+                                </filter>
+                            </defs>
+                            
+                            <!-- Outer circles -->
+                            <circle cx="200" cy="200" r="150" class="circle-outer" />
+                            <circle cx="200" cy="200" r="135" class="circle-inner" />
+                            
+                            <!-- Pentagram Star Lines -->
+                            <polygon points="200,60 282.3,313.3 66.9,156.7 333.1,156.7 117.7,313.3" class="star-lines" />
+                        </svg>
+
+                        <!-- Spinning Runes overlay -->
+                        <div class="runes-overlay"></div>
+
+                        <!-- 5 Slots positioned on Pentagram Vertices -->
+                        <div class="slots-container">
+                            <!-- Slot 1 (Top / Primary) -->
+                            <button class="slot-btn slot-1 empty" id="slot-1" onclick="openItemSelector(0)">
+                                <div class="slot-inner">
+                                    <span class="slot-label">主材 (Slot 1)</span>
+                                    <span class="slot-symbol">?</span>
+                                </div>
+                            </button>
+                            
+                            <!-- Slot 2 (Right-Top) -->
+                            <button class="slot-btn slot-2 empty" id="slot-2" onclick="openItemSelector(1)">
+                                <div class="slot-inner">
+                                    <span class="slot-label">副材 (Slot 2)</span>
+                                    <span class="slot-symbol">?</span>
+                                </div>
+                            </button>
+                            
+                            <!-- Slot 3 (Right-Bottom) -->
+                            <button class="slot-btn slot-3 empty" id="slot-3" onclick="openItemSelector(2)">
+                                <div class="slot-inner">
+                                    <span class="slot-label">副材 (Slot 3)</span>
+                                    <span class="slot-symbol">?</span>
+                                </div>
+                            </button>
+                            
+                            <!-- Slot 4 (Left-Bottom) -->
+                            <button class="slot-btn slot-4 empty" id="slot-4" onclick="openItemSelector(3)">
+                                <div class="slot-inner">
+                                    <span class="slot-label">副材 (Slot 4)</span>
+                                    <span class="slot-symbol">?</span>
+                                </div>
+                            </button>
+                            
+                            <!-- Slot 5 (Left-Top) -->
+                            <button class="slot-btn slot-5 empty" id="slot-5" onclick="openItemSelector(4)">
+                                <div class="slot-inner">
+                                    <span class="slot-label">副材 (Slot 5)</span>
+                                    <span class="slot-symbol">?</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Bubbling Cauldron (炼金釜) -->
+                    <div class="cauldron-container">
+                        <div class="steam-container">
+                            <span class="steam steam-1"></span>
+                            <span class="steam steam-2"></span>
+                            <span class="steam steam-3"></span>
+                        </div>
+                        <div class="cauldron">
+                            <div class="cauldron-rim"></div>
+                            <div class="cauldron-liquid">
+                                <div class="bubble bubble-1"></div>
+                                <div class="bubble bubble-2"></div>
+                                <div class="bubble bubble-3"></div>
+                                <div class="bubble bubble-4"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Synthesis Actions Controls -->
+                    <div class="action-controls">
+                        <div class="checkbox-row">
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="continuous-synthesis-cb">
+                                <span class="checkmark"></span>
+                                勾选连续合成
+                            </label>
+                            <button type="button" class="btn-clear-slots" id="btn-clear-all" onclick="clearAllSlots()">一键清空</button>
+                        </div>
+                        
+                        <button type="button" class="btn-synthesize disabled" id="btn-synthesize-action" onclick="handleSynthesizeClick()">
+                            <span class="btn-icon">⚡</span> 开始合成
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Side: Predictions, Config, Log, History -->
+            <section class="panel-right">
+                <!-- Config Card & History Actions -->
+                <div class="quick-panel-card">
+                    <button class="panel-tab-btn active" onclick="toggleRightTab('prediction')">🔮 预测结果</button>
+                    <button class="panel-tab-btn" onclick="toggleRightTab('console')">📟 控制台日志</button>
+                    <button class="panel-tab-btn" id="tab-btn-history" onclick="toggleRightDrawer('history')">📖 历史记录</button>
+                    <button class="panel-tab-btn" id="tab-btn-settings" onclick="toggleRightDrawer('settings')">⚙️ 参数设定</button>
+                </div>
+
+                <!-- Predictions Panel -->
+                <div class="card right-panel-content" id="panel-prediction">
+                    <h2><span class="icon">🔮</span> 合成结果概率预测</h2>
+                    <div class="predict-meta-box">
+                        <div class="meta-item">
+                            <span>基准等限制 (L_min)</span>
+                            <strong id="predict-base-level">--</strong>
+                        </div>
+                        <div class="meta-item">
+                            <span>产出等级区间</span>
+                            <strong id="predict-level-range">--</strong>
+                        </div>
+                        <div class="meta-item">
+                            <span>涉及属性种类</span>
+                            <strong id="predict-materials">--</strong>
+                        </div>
+                    </div>
+                    
+                    <div class="prediction-list-wrap">
+                        <div class="prediction-empty-state" id="prediction-empty">
+                            <div class="empty-icon">🧪</div>
+                            <p>请至少在左侧放入两个可合成的物品</p>
+                        </div>
+                        <table class="prediction-table hidden" id="prediction-table">
+                            <thead>
+                                <tr>
+                                    <th>等级</th>
+                                    <th>物品名称</th>
+                                    <th>属性类别</th>
+                                    <th>属性加成</th>
+                                    <th>成功率</th>
+                                </tr>
+                            </thead>
+                            <tbody id="prediction-tbody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Continuous Stats Panel (Shows when continuous checked) -->
+                <div class="card stats-card hidden" id="panel-continuous">
+                    <h2><span class="icon">📈</span> 连续合成模拟配置</h2>
+                    <div class="continuous-config-row">
+                        <div class="config-item">
+                            <label for="continuous-target-select">设定目标产物：</label>
+                            <select id="continuous-target-select">
+                                <option value="">随机合成 (不指定)</option>
+                            </select>
+                        </div>
+                        <div class="config-item">
+                            <label for="continuous-count-select">模拟执行次数：</label>
+                            <select id="continuous-count-select">
+                                <option value="100" selected>100 次</option>
+                                <option value="500">500 次</option>
+                                <option value="1000">1000 次</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="continuous-stats-grid hidden" id="continuous-stats-results">
+                        <div class="stat-box">
+                            <span>已合成次数</span>
+                            <strong id="stat-total-runs">0</strong>
+                        </div>
+                        <div class="stat-boxHighlight">
+                            <span>目标获得次数</span>
+                            <strong id="stat-target-hits">0</strong>
+                        </div>
+                        <div class="stat-box">
+                            <span>实际获取率</span>
+                            <strong id="stat-hit-rate">0%</strong>
+                        </div>
+                        <div class="stat-box">
+                            <span>累计消耗金币</span>
+                            <strong id="stat-gold-cost">0</strong>
+                        </div>
+                    </div>
+                    <div class="continuous-action-bar">
+                        <button type="button" class="btn-run-continuous" id="btn-run-continuous" onclick="runContinuousSimulation()">
+                            🚀 开始批量模拟
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Console Logs Panel -->
+                <div class="card right-panel-content hidden" id="panel-console">
+                    <div class="console-header">
+                        <h2><span class="icon">📟</span> 炼金系统控制台</h2>
+                        <button class="btn-clear-console" onclick="clearConsole()">清空</button>
+                    </div>
+                    <div class="console-body" id="console-logs">
+                        <div class="log-line system">[系统] 炼金釜系统初始化完毕。请放入配方原料进行仿真模拟。</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Drawers -->
+    <!-- Drawer: Parameters Settings -->
+    <div class="drawer-overlay" id="drawer-settings-overlay" onclick="closeRightDrawer('settings')"></div>
+    <div class="drawer" id="drawer-settings">
+        <div class="drawer-header">
+            <h3>⚙️ 炼金参数设定</h3>
+            <button class="drawer-close-btn" onclick="closeRightDrawer('settings')">&times;</button>
+        </div>
+        <div class="drawer-body">
+            <div class="drawer-group">
+                <label for="book-select">炼金百科书选择：</label>
+                <select id="book-select" onchange="onBookChange()">
+                    <option value="0" selected>不用百科书 (物等+0)</option>
+                    <option value="1">炼金百科一 (物等+1)</option>
+                    <option value="2">炼金百科二 (物等+2)</option>
+                    <option value="3">炼金百科三 (物等+3)</option>
+                    <option value="4">炼金百科四 (物等+4)</option>
+                </select>
+                <p class="drawer-tip">百科书可增加产出物等区间的上限，并会影响连续合成的理论金币消耗。</p>
+            </div>
+            
+            <div class="drawer-group">
+                <label>高阶炼金模拟器版本：</label>
+                <div class="static-info">新世界 3.0 (高保真版)</div>
+            </div>
+            <div class="drawer-group">
+                <label>相容性模型：</label>
+                <p class="drawer-text">槽1（主属性）决定结果的主材质属性，槽2-5作为相容副材质引入。若槽2-5中出现属性等级（物等）大于主属性的情况，在真实游戏中可能会发生吃属偏离。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drawer: Local History Records -->
+    <div class="drawer-overlay" id="drawer-history-overlay" onclick="closeRightDrawer('history')"></div>
+    <div class="drawer" id="drawer-history">
+        <div class="drawer-header">
+            <h3>📖 本地合成历史记录 (最新 100 条)</h3>
+            <button class="drawer-close-btn" onclick="closeRightDrawer('history')">&times;</button>
+        </div>
+        <div class="drawer-body">
+            <div class="drawer-actions">
+                <button class="btn-danger-small" onclick="clearHistoryRecords()">清空记录</button>
+            </div>
+            <div class="history-list" id="history-records-list">
+                <div class="history-empty">暂无合成历史记录。</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Item Selector Modal -->
+    <div class="modal-backdrop hidden" id="item-selector-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔍 选择插槽材料</h3>
+                <button class="modal-close-btn" onclick="closeItemSelector()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Search & Filters panel -->
+                <div class="modal-filters-panel">
+                    <div class="search-row">
+                        <input type="text" id="modal-search-input" placeholder="输入物品名称或等数，如：魔玉石..." autocomplete="off">
+                        <button class="modal-clear-search-btn" id="modal-clear-search-btn" onclick="clearModalSearch()">&times;</button>
+                    </div>
+                    <div class="filter-row">
+                        <div class="filter-col">
+                            <label for="modal-category-select">品类：</label>
+                            <select id="modal-category-select" onchange="filterModalItems()">
+                                <option value="">全部</option>
+                            </select>
+                        </div>
+                        <div class="filter-col">
+                            <label for="modal-material-select">主材质：</label>
+                            <select id="modal-material-select" onchange="filterModalItems()">
+                                <option value="">全部</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Selected Item Summary & Confirm -->
+                <div class="modal-result-summary" id="modal-selected-summary">
+                    <div class="selected-details-empty">请在下方列表选择一件物品...</div>
+                </div>
+
+                <!-- Items list -->
+                <div class="modal-items-list-wrap">
+                    <table class="modal-items-table">
+                        <thead>
+                            <tr>
+                                <th>物等</th>
+                                <th>物品名称</th>
+                                <th>材质</th>
+                                <th>类别</th>
+                                <th>携带属性</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modal-items-tbody">
+                            <!-- Loaded dynamically from db -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Result Reveal Modal -->
+    <div class="modal-backdrop hidden" id="result-reveal-modal">
+        <div class="reveal-content">
+            <div class="reveal-title">🎉 合成成功 🎉</div>
+            
+            <div class="reveal-card">
+                <div class="reveal-level" id="reveal-item-level">物等 21</div>
+                <div class="reveal-name" id="reveal-item-name">晚宴礼服</div>
+                
+                <table class="reveal-table">
+                    <tr>
+                        <th>材质属性</th>
+                        <td id="reveal-item-material">兽皮</td>
+                    </tr>
+                    <tr>
+                        <th>装备类别</th>
+                        <td id="reveal-item-category">衣服</td>
+                    </tr>
+                    <tr>
+                        <th>数值加成</th>
+                        <td id="reveal-item-stats">DEF+21 MDEF+21</td>
+                    </tr>
+                </table>
+            </div>
+
+            <button type="button" class="btn-reveal-close" onclick="closeResultReveal()">确定</button>
+        </div>
+    </div>
+
+    <!-- JS dependencies -->
+    <script src="../alchemy_db.js?v=3.0.23"></script>
+    <script src="alchemy_core.js?v=3.0.24"></script>
+    <script src="simulator.js?v=1.0.0"></script>
+</body>
+</html>

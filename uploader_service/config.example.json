@@ -1,0 +1,7 @@
+{
+  "tencent_cos_secret_id": "YOUR_SECRET_ID",
+  "tencent_cos_secret_key": "YOUR_SECRET_KEY",
+  "tencent_cos_bucket": "YOUR_BUCKET_NAME-APPID",
+  "tencent_cos_region": "ap-guangzhou",
+  "port": "8080"
+}
