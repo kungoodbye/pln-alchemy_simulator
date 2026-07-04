@@ -1,0 +1,11 @@
+Lv2 | 玉戒指 | 特殊装备 | req=4 | subs=['草类纤维'] | EXCLUDED: subs ['草类纤维'] not in input
+Lv2 | 光之指环 | 特殊装备 | req=4 | subs=['草类纤维'] | EXCLUDED: subs ['草类纤维'] not in input
+Lv4 | 灭音器 | 制作零件 | req=0 | subs=[] | EXCLUDED: not equip/mineral
+Lv4 | 精准瞄准器 | 制作零件 | req=0 | subs=[] | EXCLUDED: not equip/mineral
+Lv5 | 白玉 | 矿石 | req=0 | subs=[] | OK
+Lv6 | 红玉 | 矿石 | req=0 | subs=[] | OK
+Lv6 | 狼牙守护 | 特殊装备 | req=12 | subs=['草类纤维'] | EXCLUDED: subs ['草类纤维'] not in input
+Lv7 | 泥菩萨像 | 特殊装备 | req=14 | subs=['草类纤维'] | EXCLUDED: subs ['草类纤维'] not in input
+Lv7 | 白玉粉 | 制作零件 | req=0 | subs=[] | EXCLUDED: not equip/mineral
+Lv8 | 红玉粉 | 制作零件 | req=0 | subs=[] | EXCLUDED: not equip/mineral
+Candidates passing filter: 2

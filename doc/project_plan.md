@@ -91,9 +91,9 @@
 
 ### 3.1 版本控制
 
-- [ ] 引入 Git 仓库
-- [ ] 配置 `.gitignore`（排除 `config.json` 中的密钥、`uploads.json` 中的生产数据）
-- [ ] 提供 `config.example.json` 模板
+- [x] 引入 Git 仓库（已推送至 https://github.com/kungoodbye/pln-alchemy_simulator）
+- [x] 配置 `.gitignore`（排除 `config.json` 中的密钥、`uploads.json` 中的生产数据）
+- [x] 提供 `config.example.json` 模板
 
 ### 3.2 Go 后端分层重构
 

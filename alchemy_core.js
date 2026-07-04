@@ -124,8 +124,11 @@ function normalizeCraftItemName(name) {
 
 function getAdvancedAlchemyLevelRange(level1, level2, book = 0) {
     const baseLevel = Math.min(level1, level2);
+    // L_base >= 8: downgrade up to 7 levels
+    // L_base < 8:  downgrade up to 3 levels (game-verified, e.g. 5+5 → range 2-9)
+    const downgradeRange = baseLevel >= 8 ? 7 : 3;
     return {
-        min: baseLevel >= 8 ? baseLevel - 7 : baseLevel,
+        min: Math.max(1, baseLevel - downgradeRange),
         max: baseLevel + ADVANCED_ALCHEMY_BASE_BONUS + book
     };
 }
@@ -342,7 +345,8 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     const candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
     if (candidates.length === 0) return 0;
     
-    const minLevel = L_min + B - 7;
+    const downgradeRange = L_min >= 8 ? 7 : 3;
+    const minLevel = Math.max(1, L_min + B - downgradeRange);
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
@@ -428,7 +432,8 @@ function getRecipeOutcomeBreakdown(recipe, targetItem = null) {
     const candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
     if (candidates.length === 0) return "";
     
-    const minLevel = L_min + B - 7;
+    const downgradeRange = L_min >= 8 ? 7 : 3;
+    const minLevel = Math.max(1, L_min + B - downgradeRange);
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
@@ -1143,7 +1148,8 @@ function getAlchemyResultCandidatesMulti(ingredients, book = 0) {
     const levels = ingredients.map(item => item.level);
     const L_min = Math.min(...levels);
     
-    const minLevel = L_min >= 8 ? L_min - 7 : L_min;
+    const downgradeRange = L_min >= 8 ? 7 : 3;
+    const minLevel = Math.max(1, L_min - downgradeRange);
     const maxLevel = L_min + 4 + book;
     
     const inputMaterials = ingredients.map(item => String(item.material || "").trim()).filter(Boolean);
@@ -1172,7 +1178,8 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     const candidates = getAlchemyResultCandidatesMulti(ingredients, B);
     if (candidates.length === 0) return [];
     
-    const minLevel = L_min + B - 7;
+    const downgradeRange = L_min >= 8 ? 7 : 3;
+    const minLevel = Math.max(1, L_min + B - downgradeRange);
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
