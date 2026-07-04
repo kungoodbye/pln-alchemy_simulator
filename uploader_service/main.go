@@ -38,7 +38,8 @@ type SynthesisResult struct {
 	Recipes []RecipeEntry `json:"recipes"`
 }
 
-// RecipeEntry represents a single identified recipe in the screenshot
+// RecipeEntry represents a single identified recipe in the screenshot.
+// Slots 3–5 are optional (omitempty) for backward compatibility with 2-slot recipes.
 type RecipeEntry struct {
 	TargetName    string `json:"target_name"`
 	TargetLevel   int    `json:"target_level"`
@@ -48,6 +49,15 @@ type RecipeEntry struct {
 	Slot2Name     string `json:"slot2_name"`
 	Slot2Level    int    `json:"slot2_level"`
 	Slot2Material string `json:"slot2_material,omitempty"`
+	Slot3Name     string `json:"slot3_name,omitempty"`
+	Slot3Level    int    `json:"slot3_level,omitempty"`
+	Slot3Material string `json:"slot3_material,omitempty"`
+	Slot4Name     string `json:"slot4_name,omitempty"`
+	Slot4Level    int    `json:"slot4_level,omitempty"`
+	Slot4Material string `json:"slot4_material,omitempty"`
+	Slot5Name     string `json:"slot5_name,omitempty"`
+	Slot5Level    int    `json:"slot5_level,omitempty"`
+	Slot5Material string `json:"slot5_material,omitempty"`
 	Book          int    `json:"book"`
 }
 

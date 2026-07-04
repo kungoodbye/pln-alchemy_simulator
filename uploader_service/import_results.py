@@ -66,7 +66,7 @@ def main():
             unique_recipes = []
             seen = set()
             for recipe in entry.get("recipes", []):
-                # Hashable key for comparison
+                # Hashable key for comparison (all 5 slots)
                 key = (
                     recipe.get("target_name"),
                     recipe.get("target_level"),
@@ -74,21 +74,23 @@ def main():
                     recipe.get("slot1_level"),
                     recipe.get("slot2_name"),
                     recipe.get("slot2_level"),
+                    recipe.get("slot3_name"),
+                    recipe.get("slot3_level"),
+                    recipe.get("slot4_name"),
+                    recipe.get("slot4_level"),
+                    recipe.get("slot5_name"),
+                    recipe.get("slot5_level"),
                     recipe.get("book", 0)
                 )
                 if key not in seen:
                     seen.add(key)
-                    
-                    # Auto-fill Slot 1 material
-                    slot1_name = recipe.get("slot1_name")
-                    if slot1_name in db_items:
-                        recipe["slot1_material"] = db_items[slot1_name].get("material", "")
-                    
-                    # Auto-fill Slot 2 material
-                    slot2_name = recipe.get("slot2_name")
-                    if slot2_name in db_items:
-                        recipe["slot2_material"] = db_items[slot2_name].get("material", "")
-                    
+
+                    # Auto-fill material for slots 1–5
+                    for slot_num in range(1, 6):
+                        slot_name = recipe.get(f"slot{slot_num}_name")
+                        if slot_name and slot_name in db_items:
+                            recipe[f"slot{slot_num}_material"] = db_items[slot_name].get("material", "")
+
                     unique_recipes.append(recipe)
 
             # Update record

@@ -169,12 +169,22 @@ async function loadUploadedRecords() {
             let recipesHtml = "";
             if (rec.status === "recognized" && rec.result && rec.result.recipes) {
                 rec.result.recipes.forEach(recipe => {
+                    // Build material slots string (slot2–slot5, optional)
+                    let materialsStr = `<span style="color: var(--gold)">主(${recipe.slot1_level})${recipe.slot1_name}</span>`;
+                    for (let s = 2; s <= 5; s++) {
+                        const name = recipe[`slot${s}_name`];
+                        const level = recipe[`slot${s}_level`];
+                        if (name) {
+                            materialsStr += ` + <span style="color: #a3be8c">副(${level || '?'})${name}</span>`;
+                        }
+                    }
+                    // Book indicator
+                    const bookStr = recipe.book > 0 ? ` <span style="font-size:0.7rem;color:#b48ead;">[百科${recipe.book}]</span>` : '';
                     recipesHtml += `
                         <div style="font-size: 0.8rem; margin-top: 5px; color: #eed8a1; line-height: 1.4;">
-                            <span style="color: var(--gold)">主(${recipe.slot1_level})${recipe.slot1_name}</span> + 
-                            <span style="color: #a3be8c">副(${recipe.slot2_level})${recipe.slot2_name}</span> 
-                            ➡️ 
-                            <span style="color: #ff9f43; font-weight: bold">(${recipe.target_level})${recipe.target_name}</span>
+                            ${materialsStr}
+                            ➡️
+                            <span style="color: #ff9f43; font-weight: bold">(${recipe.target_level})${recipe.target_name}</span>${bookStr}
                         </div>
                     `;
                 });
