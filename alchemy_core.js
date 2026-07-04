@@ -178,34 +178,53 @@ function getAlchemyResultCandidates(primaryItem, secondaryItem, book = 0, target
     
     const range = getAdvancedAlchemyLevelRange(primaryItem.level, secondaryItem.level, book);
     
-    // Active materials
     const activeMaterials = typeof enabledMaterials !== 'undefined' ? enabledMaterials : new Set(ALL_EQUIPMENT_MATERIALS);
     const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
-    
-    return itemsDb.filter(item => {
+
+    const secondaryMaterial = String(secondaryItem.material || "").trim();
+
+    // Step 1: filter by type, material, level range, active materials
+    let candidates = itemsDb.filter(item => {
         const isCompoundingCandidate = (item.req_level > 0) || (item.category === "矿物类");
         if (!isCompoundingCandidate) return false;
         if (item.material !== primaryItem.material) return false;
         if (item.level < range.min || item.level > range.max) return false;
         if (!activeMaterials.has(item.material)) return false;
-        
+
         const itemSlots = getItemMaterialSlots(item);
         if (itemSlots.some(material => !activeMaterials.has(material))) return false;
-        
-        // Output sub-materials must be covered by compounding ingredients
-        const inputMaterials = [primaryItem.material, secondaryItem.material].map(x => String(x || "").trim()).filter(Boolean);
-        if (targetItem) {
-            const targetSlots = getItemMaterialSlots(targetItem);
-            if (targetSlots.length > 2) {
-                for (let i = 2; i < targetSlots.length; i++) {
-                    inputMaterials.push(targetSlots[i]);
-                }
+
+        return true;
+    });
+
+    // Step 2: key rule — if secondary material matches any candidate's sub-material,
+    // it's a "key" that locks candidates to only those requiring that sub-material.
+    // If it matches none, it's "trash" (杂物) with no filtering effect.
+    const hasMatchingSub = candidates.some(item => {
+        const subs = getItemMaterialSlots(item).slice(1);
+        return subs.includes(secondaryMaterial);
+    });
+    if (hasMatchingSub) {
+        candidates = candidates.filter(item => {
+            const subs = getItemMaterialSlots(item).slice(1);
+            return subs.includes(secondaryMaterial);
+        });
+    }
+
+    // Step 3: all item sub-materials must be covered by input materials
+    const inputMaterials = [primaryItem.material, secondaryItem.material].map(x => String(x || "").trim()).filter(Boolean);
+    if (targetItem) {
+        const targetSlots = getItemMaterialSlots(targetItem);
+        if (targetSlots.length > 2) {
+            for (let i = 2; i < targetSlots.length; i++) {
+                inputMaterials.push(targetSlots[i]);
             }
         }
-        
-        if (!itemSlots.every(mat => inputMaterials.includes(mat))) return false;
-        
-        return true;
+    }
+
+    return candidates.filter(item => {
+        const itemSlots = getItemMaterialSlots(item);
+        return itemSlots.every(mat => inputMaterials.includes(mat));
     }).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
 }
 
@@ -1153,18 +1172,42 @@ function getAlchemyResultCandidatesMulti(ingredients, book = 0) {
     const maxLevel = L_min + 4 + book;
     
     const inputMaterials = ingredients.map(item => String(item.material || "").trim()).filter(Boolean);
-    
+    const secondaryMaterials = inputMaterials.slice(1); // Non-primary materials
+
     const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
-    
-    return itemsDb.filter(item => {
+
+    // Step 1: filter by type, material, level range
+    let candidates = itemsDb.filter(item => {
         const isCompoundingCandidate = (item.req_level > 0) || (item.category === "矿物类");
         if (!isCompoundingCandidate) return false;
         if (item.material !== primaryMaterial) return false;
         if (item.level < minLevel || item.level > maxLevel) return false;
-        
+        return true;
+    });
+
+    // Step 2: key rule — if a secondary material matches any candidate's sub-material,
+    // it's a "key" that locks candidates to only those requiring that sub-material.
+    // If it matches none, it's "trash" (杂物) with no filtering effect.
+    for (const secMat of secondaryMaterials) {
+        const hasMatch = candidates.some(item => {
+            const subs = getItemMaterialSlots(item).slice(1);
+            return subs.includes(secMat);
+        });
+        if (hasMatch) {
+            candidates = candidates.filter(item => {
+                const subs = getItemMaterialSlots(item).slice(1);
+                return subs.includes(secMat);
+            });
+        }
+    }
+
+    // Step 3: all item sub-materials must be covered by input materials
+    candidates = candidates.filter(item => {
         const itemSlots = getItemMaterialSlots(item);
         return itemSlots.every(mat => inputMaterials.includes(mat));
-    }).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
+    });
+
+    return candidates.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
 }
 
 function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
