@@ -365,14 +365,14 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     if (candidates.length === 0) return 0;
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
+    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     let targetProb = 0;
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
         const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
@@ -390,16 +390,20 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
 }
 
 // Jump probabilities table:
-function getDeltaProb(delta, downgradeRange = 7) {
-    if (delta === 4) return 0.10;
-    if (delta === 3) return 0.25;
-    if (delta === 2) return 0.30;
-    if (delta === 1) return 0.15;
-    if (delta === 0) return 0.15;
-    if (delta < 0) {
-        return 0.05 / downgradeRange; // 5% spread across actual downgrade levels
+// climb = levels jumped by alchemy RNG (not including encyclopedia bonus)
+// Advanced Alchemy: max climb +5 (official FAQ confirmed)
+// Encyclopedia adds B as flat bonus: final_level = L_min + climb + B
+function getDeltaProb(climb, downgradeRange = 7) {
+    if (climb === 5) return 0.01;  // +5: extremely rare (official: 非常渺茫)
+    if (climb === 4) return 0.09;
+    if (climb === 3) return 0.25;
+    if (climb === 2) return 0.30;
+    if (climb === 1) return 0.15;
+    if (climb === 0) return 0.15;
+    if (climb < 0) {
+        return 0.05 / downgradeRange; // 5% total spread across downgrade levels
     }
-    return 0; // delta > 4: encyclopedia-extended levels, TBD
+    return 0; // climb > 5: not possible (even with encyclopedia, climb max is 5)
 }
 
 // Map output level to candidates with fallback handling
@@ -452,14 +456,14 @@ function getRecipeOutcomeBreakdown(recipe, targetItem = null) {
     if (candidates.length === 0) return "";
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
+    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     const itemProbabilities = {};
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
         const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
@@ -1222,14 +1226,14 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     if (candidates.length === 0) return [];
     
     const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min - downgradeRange);  // 百科 only extends upward, not shift downgrade
+    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
     const maxLevel = L_min + B + 4;
     
     const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
     const itemProbabilities = {};
     for (let L = minLevel; L <= maxLevel; L++) {
-        const delta = L - L_min;  // jump from base level (百科 extends range, not shift center)
+        const climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
         const prob = getDeltaProb(delta, downgradeRange);
         if (prob <= 0) continue;
         
