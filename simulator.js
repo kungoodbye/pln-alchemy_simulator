@@ -659,3 +659,5 @@ function handleBackToFinder(event) {
     const isLocal = window.location.protocol === "file:";
     window.location.href = isLocal ? "../炼金项目归档/web/index.html" : "../index.html";
 }
+
+// MATERIAL_ABBREVIATIONS + resolveMaterialAbbreviation defined in alchemy_core.js

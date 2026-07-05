@@ -1621,7 +1621,10 @@ function queryEquipmentItems(filters = {}) {
                     item.level,
                     item.req_level
                 ].map(value => String(value || "").toLowerCase());
-                if (!searchable.some(value => value.includes(query))) return false;
+                // Tokenize: "21木" → ["21","木"], "铜刀" → ["铜刀"]
+                const tokens = query.split(/(\d+)/).filter(Boolean).map(t => t.trim().toLowerCase()).filter(Boolean);
+                if (tokens.length === 0) tokens.push(query);
+                if (!tokens.every(token => searchable.some(value => value.includes(token)))) return false;
             }
             if (category && item.category !== category) return false;
             if (primaryMaterial && item.material !== primaryMaterial) return false;
