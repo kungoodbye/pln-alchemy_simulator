@@ -249,19 +249,48 @@ function filterModalItems() {
 
     const category = document.getElementById("modal-category-select").value;
     const material = document.getElementById("modal-material-select").value;
-    
+
+    // Parse "level+material" combo format (e.g. "21木", "木21", "21 木材")
+    let parsedLevel = null;
+    let parsedMaterial = null;
+    let remainingQuery = query;
+
+    const COMBO_PATTERNS = [
+        { regex: /^(\d+)\s+(\S+)$/, numIdx: 1, matIdx: 2 },
+        { regex: /^(\S+)\s+(\d+)$/, numIdx: 2, matIdx: 1 },
+        { regex: /^(\d+)(\S+)$/,    numIdx: 1, matIdx: 2 },
+        { regex: /^(\S+)(\d+)$/,    numIdx: 2, matIdx: 1 },
+    ];
+
+    for (const p of COMBO_PATTERNS) {
+        const m = query.match(p.regex);
+        if (m) {
+            const resolved = resolveMaterialAbbreviation(m[p.matIdx]);
+            if (resolved) {
+                parsedLevel = parseInt(m[p.numIdx], 10);
+                parsedMaterial = resolved;
+                remainingQuery = '';
+            }
+            break;
+        }
+    }
+
     // Filter database
     const matches = dbItems.filter(item => {
         // Must have level and material
         if (!item.material || item.level <= 0) return false;
-        
-        if (query) {
+
+        // Exact level+material filter from parsed combo
+        if (parsedLevel !== null && item.level !== parsedLevel) return false;
+        if (parsedMaterial && item.material !== parsedMaterial) return false;
+
+        if (remainingQuery) {
             const searchable = [
                 ...getItemSearchAliases(item),
                 item.id,
                 item.level
             ].map(v => String(v || "").toLowerCase());
-            if (!searchable.some(v => v.includes(query))) return false;
+            if (!searchable.some(v => v.includes(remainingQuery))) return false;
         }
         if (category && item.category !== category) return false;
         if (material && item.material !== material) return false;
@@ -618,4 +647,15 @@ function clearConsole() {
     if (logBox) {
         logBox.innerHTML = `<div class="log-line system">[系统] 控制台日志已清空。</div>`;
     }
+}
+
+/**
+ * Handle "返回配方寻路器" navigation.
+ * On local file:// protocol, redirect to the archived stable version.
+ * On server, use the relative path that points to the deployed root.
+ */
+function handleBackToFinder(event) {
+    event.preventDefault();
+    const isLocal = window.location.protocol === "file:";
+    window.location.href = isLocal ? "../炼金项目归档/web/index.html" : "../index.html";
 }

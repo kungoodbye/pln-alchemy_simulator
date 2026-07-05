@@ -21,7 +21,7 @@
             <p class="subtitle">高度仿真游戏内炼金合成机制，实时进行概率预测、单次模拟与连续合成统计</p>
             <div class="header-actions" style="display: flex; gap: 10px;">
                 <a href="upload.html" class="nav-back-btn" style="border-color: var(--violet); color: #eed8a1;">📤 上传合成截图</a>
-                <a href="../index.html" class="nav-back-btn">← 返回配方寻路器</a>
+                <a href="../index.html" class="nav-back-btn" onclick="handleBackToFinder(event)">← 返回配方寻路器</a>
             </div>
         </header>
 
@@ -319,7 +319,7 @@
                 <!-- Search & Filters panel -->
                 <div class="modal-filters-panel">
                     <div class="search-row">
-                        <input type="text" id="modal-search-input" placeholder="输入物品名称或等数，如：魔玉石..." autocomplete="off">
+                        <input type="text" id="modal-search-input" placeholder="输入物品名、等数或"等数+材质"，如：21木、魔玉石..." autocomplete="off">
                         <button class="modal-clear-search-btn" id="modal-clear-search-btn" onclick="clearModalSearch()">&times;</button>
                     </div>
                     <div class="filter-row">
@@ -394,6 +394,7 @@
     </div>
 
     <!-- JS dependencies -->
+    <script src="alchemy_config.js?v=1.4"></script>
     <script src="alchemy_core.js?v=1.4"></script>
     <script src="alchemy_data.js?v=1.4"></script>
     <script src="simulator.js?v=1.4"></script>
