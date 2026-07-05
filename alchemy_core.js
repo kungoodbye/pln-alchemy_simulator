@@ -1615,16 +1615,31 @@ function queryEquipmentItems(filters = {}) {
             if (!showNoStats && hasNoStats && !isProp && item.material !== "星耀" && !hasCraft) return false;
             
             if (query) {
-                const searchable = [
-                    ...getItemSearchAliases(item),
-                    item.id,
-                    item.level,
-                    item.req_level
-                ].map(value => String(value || "").toLowerCase());
-                // Tokenize: "21木" → ["21","木"], "铜刀" → ["铜刀"]
-                const tokens = query.split(/(\d+)/).filter(Boolean).map(t => t.trim().toLowerCase()).filter(Boolean);
-                if (tokens.length === 0) tokens.push(query);
-                if (!tokens.every(token => searchable.some(value => value.includes(token)))) return false;
+                // Parse combo format: "21木", "木21", "21 木材"
+                var comboLevel = null, comboMaterial = null, comboQuery = query;
+                var patterns = [
+                    { regex: /^(\d+)\s+(\S+)$/, n:1, m:2 },
+                    { regex: /^(\S+)\s+(\d+)$/, n:2, m:1 },
+                    { regex: /^(\d+)(\S+)$/,    n:1, m:2 },
+                    { regex: /^(\S+)(\d+)$/,    n:2, m:1 }
+                ];
+                for (var pi = 0; pi < patterns.length; pi++) {
+                    var match = comboQuery.match(patterns[pi].regex);
+                    if (match) {
+                        var resolved = resolveMaterialAbbreviation(match[patterns[pi].m]);
+                        if (resolved) { comboLevel = parseInt(match[patterns[pi].n],10); comboMaterial = resolved; comboQuery = ""; }
+                        break;
+                    }
+                }
+                if (comboLevel !== null && item.level !== comboLevel) return false;
+                if (comboMaterial && item.material !== comboMaterial) return false;
+                if (comboQuery) {
+                    var searchable = [...getItemSearchAliases(item), item.id, item.level, item.req_level]
+                        .map(function(v){return String(v||"").toLowerCase();});
+                    var tokens = comboQuery.split(/(\d+)/).filter(Boolean).map(function(t){return t.trim().toLowerCase();}).filter(Boolean);
+                    if (tokens.length===0) tokens.push(comboQuery);
+                    if (!tokens.every(function(t){return searchable.some(function(v){return v.includes(t);});})) return false;
+                }
             }
             if (category && item.category !== category) return false;
             if (primaryMaterial && item.material !== primaryMaterial) return false;
@@ -1678,4 +1693,20 @@ function queryEquipmentItems(filters = {}) {
             if ((a.req_level || 0) !== (b.req_level || 0)) return (a.req_level || 0) - (b.req_level || 0);
             return String(a.name || "").localeCompare(String(b.name || ""), "zh-Hans-CN");
         });
+}
+
+// Material abbreviation mapping for search (22 entries)
+var MATERIAL_ABBREVIATIONS = (window.alchemy_config && window.alchemy_config.MATERIAL_ABBREVIATIONS) || {
+    "木":"木材","皮":"兽皮","骨":"兽骨","毛":"兽毛","羽":"羽毛",
+    "壳":"甲壳","赤":"赤铁","魔":"魔性物质","白":"白银","钻":"钻石",
+    "宝":"宝石","水":"水晶","黏":"白色黏土","泥":"普通黏土",
+    "草":"草类纤维","花":"花类纤维","叶":"叶类纤维",
+    "米":"米","麦":"麦","肉":"肉","蛋":"蛋","豆":"豆"
+};
+
+function resolveMaterialAbbreviation(input) {
+    if (!input) return null;
+    if (MATERIAL_ABBREVIATIONS[input]) return MATERIAL_ABBREVIATIONS[input];
+    if (ALL_EQUIPMENT_MATERIALS && ALL_EQUIPMENT_MATERIALS.includes(input)) return input;
+    return null;
 }
