@@ -1,17 +1,245 @@
 // ==========================================================================
-// 飘流幻境新世界 - 智能炼金核心共享逻辑 (alchemy_core.js)
+// 飘流幻境新世界 - 智能炼金核心共享逻辑 (统一 Isomorphic 版本)
+// 同时支持浏览器 (<script>) 和 CommonJS (require) 环境
+// 源码位置: pln-core/alchemy_core.js
 // ==========================================================================
 
-// Filtered list of relevant WLO materials used in equipment compounding
-var ALL_EQUIPMENT_MATERIALS = (window.alchemy_config && window.alchemy_config.ALL_EQUIPMENT_MATERIALS) || [
-    "花类纤维", "草类纤维", "叶类纤维", "羽毛", "羽麻", "尼龙", "兽皮", "兽毛", "兽骨", 
+(function(root, factory) {
+    if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+        module.exports = factory();
+    } else {
+        factory();
+    }
+})(typeof self !== 'undefined' ? self : this, function() {
+    'use strict';
+
+    // === 环境适配: 数据源 ===
+    var db = null;
+    function setDB(d) { db = d; }
+    function getDB() {
+    if (db) return db;
+    if (typeof window !== 'undefined' && window.alchemy_db) {
+        db = window.alchemy_db;
+        return db;
+    }
+    return null;
+    }
+
+    // === 环境适配: 配置 ===
+    var alchemy_config = typeof window !== 'undefined' && window.alchemy_config
+        ? window.alchemy_config
+        : (typeof require === 'function' ? require('./alchemy_config.js') : {});
+
+    // 从 alchemy_config 提取在代码中作为裸变量使用的属性
+    var LEVEL_DOWN_SOURCE_NAMES = alchemy_config.LEVEL_DOWN_SOURCE_NAMES || {};
+    var LEVEL_UP_SOURCE_NAMES = alchemy_config.LEVEL_UP_SOURCE_NAMES || {};
+    var MATERIAL_GROUPS = alchemy_config.MATERIAL_GROUPS || {};
+
+var NO_OBTAIN_PATH_METHODS = new Set([
+    "dungeon", "gacha", "event", "mystery_box",
+    "shop", "simple_combine", "mall"
+]);
+
+// 非炼金方式
+var NON_ALCHEMY_METHODS = new Set([
+    "shop", "simple_combine", "craft", "unknown", "mall"
+]);
+
+// 装备类型
+var EQUIPMENT_TYPES = new Set([
+    "武器", "衣服", "头饰", "护手", "靴鞋", "特殊装备"
+]);
+
+// 通用安全杂物
+var UNIVERSAL_SAFE_JUNK = ["草类纤维", "花类纤维", "叶类纤维", "石头", "兽骨", "羽毛"];
+
+function getSafeJunkMaterials(primaryMaterial) {
+    var compat = COMPATIBILITY[primaryMaterial] || [];
+    return UNIVERSAL_SAFE_JUNK.filter(function(m) { return compat.indexOf(m) === -1; });
+}
+
+function getSafeJunkDescription(primaryMaterial, junkLevel) {
+    var compat = COMPATIBILITY[primaryMaterial] || [];
+    if (compat.indexOf("木材") === -1) return junkLevel + "等任意杂物";
+    return junkLevel + "等非木杂物";
+}
+
+// 高阶/中阶炼金的基础加成（小程序默认高阶）
+function getAlchemyBaseBonus() {
+    return 4;
+}
+
+// 跳级惩罚（高阶炼金）
+function getJumpPenalty(jump) {
+    var penalties = {
+        0: 0,
+        1: 50,
+        2: 100,
+        3: 1500,
+        4: 8000,
+        5: 50000
+    };
+    return penalties[jump] !== undefined ? penalties[jump] : 999999;
+}
+
+// 判断是否纯器具制作（无其他来源）
+function isStrictlyCraftOnly(item) {
+    if (!item) return false;
+    var method = item.obtain_method;
+    var source = item.source || "";
+    var formula = item.recommended_formula || "";
+    return method === "craft" && !source.trim() && !formula.trim();
+}
+
+// 从 stats 字符串提取单一属性
+function getSingleAttribute(statsStr) {
+    var s = String(statsStr || "").trim();
+    if (!s || s === "无" || s === "无属性") return null;
+    var parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length !== 1) return null;
+    var part = parts[0];
+    var match = part.match(/^([a-zA-Z]+)([-+]\d+)/);
+    if (!match) return "特殊";
+    var attrName = match[1].toUpperCase();
+    var sign = match[2][0];
+    if (attrName === "SPD" && sign === "-") return "-SPD";
+    if (["ATK", "DEF", "MATK", "MDEF", "SPD"].indexOf(attrName) !== -1) return attrName;
+    return "特殊";
+}
+
+// 非合成来源树
+function buildNonSynthSourceTree(targetItem) {
+    if (!targetItem) return null;
+    var sourceText = targetItem.source_display || targetItem.recommended_formula || "";
+    var methodIcons = {
+        gacha: "扭蛋", mystery_box: "礼盒", dungeon: "副本",
+        event: "活动", shop: "商店", simple_combine: "对合",
+        craft: "制作", unknown: "未知", mall: "商城"
+    };
+    var methodLabels = {
+        gacha: "扭蛋/点数抽取",
+        mystery_box: "神秘套装盒开出",
+        dungeon: "副本获取",
+        event: "活动/宝箱获取",
+        shop: "商店购买",
+        simple_combine: "低级对合",
+        craft: "器具制作获取",
+        unknown: "来源未收录",
+        mall: "商城购买（无法合成）"
+    };
+    var method = targetItem.obtain_method || "unknown";
+    var icon = methodIcons[method] || "来源";
+    var label = methodLabels[method] || "来源";
+    return {
+        name: targetItem.name,
+        material: targetItem.material,
+        level: targetItem.level,
+        cost: 0,
+        method: "nonSynthSource",
+        sourceNote: icon + " " + label + ": " + (sourceText || "暂未收录"),
+        children: []
+    };
+}
+
+// 配方描述生成
+function getRecipeDesc(name1, L1, count1, name2, L2, count2, book, J, isLevelDown, targetItem, isLevelUp) {
+    var isProp = targetItem && !isEquipmentCandidate(targetItem);
+    var alt1 = getAlternativeNames(targetItem ? targetItem.material : null, L1, name1) || '';
+    var alt2 = getAlternativeNames(targetItem ? targetItem.material : null, L2, name2) || '';
+    var displayName1 = name1 + alt1;
+    var displayName2 = name2 + alt2;
+    var countText1 = count1 > 1 ? ' x' + count1 : '';
+    var countText2 = count2 > 1 ? ' x' + count2 : '';
+
+    if (isProp) {
+        if (isLevelUp) return '主材: ' + name1 + ' [物等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [物等' + L2 + ']' + countText2 + ' (升等合成)';
+        if (isLevelDown) return '主材: ' + name1 + ' [物等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [物等' + L2 + ']' + countText2 + ' (降等合成)';
+        return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + (J > 0 ? ' 且额外跳' + J + '级' : '');
+    } else {
+        var bookText = book > 0 ? ' + 使用百科' + book + ' (+' + book + '级)' : ' + 不使用百科';
+        if (isLevelUp) return '主材: ' + name1 + ' [等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [等' + L2 + ']' + countText2 + ' + 无百科书 (升等合成)';
+        if (isLevelDown) return '主材: ' + name1 + ' [等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [等' + L2 + ']' + countText2 + ' + 无百科书 (降等合成)';
+        if (J === 0 && book === 0) return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + ' + 不使用百科 (高级炼金范围命中)';
+        return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + bookText + (J > 0 ? ' 且额外跳' + J + '级' : ' (无额外跳级)');
+    }
+}
+
+// 简化配方副材（判断是否可用杂物替代）
+function simplifyRecipeSlot2(node_slot1, node_slot2, B, targetItem) {
+    if (!node_slot1.item || !node_slot2.item) {
+        return {
+            name2: node_slot2.item ? node_slot2.item.name : (node_slot2.name || ''),
+            cost2: node_slot2.cost,
+            node2: node_slot2
+        };
+    }
+    var L = targetItem ? targetItem.level : 0;
+    var name1 = node_slot1.item.name;
+    var name2 = node_slot2.item.name;
+    var M1 = node_slot1.item.material;
+    var M2 = node_slot2.item.material;
+    var L1 = node_slot1.item.level;
+    var L2 = node_slot2.item.level;
+    var L_low = Math.min(L1, L2);
+    var useJunk = false;
+
+    if (M2 !== M1) {
+        var baseBonus = getAlchemyBaseBonus();
+        var bookBonus = B === 0 ? 0 : B + 1;
+        var maxL_mixed = L_low + baseBonus - 1 + bookBonus;
+        var minL_mixed = Math.max(1, L_low + B - 7);
+
+        var hasM2Outputs = false;
+        for (var i = 0; i < getDB().length; i++) {
+            var item = getDB()[i];
+            if (item.material !== M2) continue;
+            if (item.level < minL_mixed || item.level > maxL_mixed) continue;
+            if ((item.req_level > 0) || (item.category === '矿物类') || (item.material && item.level > 0 && item.req_level === 0)) {
+                hasM2Outputs = true;
+                break;
+            }
+        }
+        if (!hasM2Outputs) useJunk = true;
+    } else {
+        var baseBonus2 = getAlchemyBaseBonus();
+        var bookBonus2 = B === 0 ? 0 : B + 1;
+        var maxL_mixed2 = L_low + baseBonus2 - 1 + bookBonus2;
+        if (L <= maxL_mixed2) useJunk = true;
+    }
+
+    if (useJunk) {
+        var junkCost = Math.max(10, L2 * 5);
+        return {
+            name2: L2 + '等属性杂物',
+            cost2: junkCost,
+            node2: {
+                item: { name: L2 + '等属性杂物', level: L2, material: '任意' },
+                cost: junkCost,
+                method: 'base',
+                exactName: true
+            }
+        };
+    }
+
+    return {
+        name2: name2,
+        cost2: node_slot2.cost,
+        node2: node_slot2
+    };
+}
+
+var ALL_EQUIPMENT_MATERIALS = (alchemy_config && alchemy_config.ALL_EQUIPMENT_MATERIALS) || [
+    "花类纤维", "草类纤维", "叶类纤维", "羽毛", "羽麻", "尼龙", "兽皮", "兽毛", "兽骨",
     "金", "银", "白银", "铜", "铁", "钢", "赤铁", "锡", "铅", "铝", "钛", "星耀",
     "水晶", "钻石", "宝石", "玉", "石头", "磁石", "魔性物质", "白色黏土", "结晶体", "胶质", "甲壳", "木材"
 ].sort();
 
+// 全局材质启用集合（默认全部启用）
+var enabledMaterials = new Set(ALL_EQUIPMENT_MATERIALS);
+
 // Material compatibility table (主属性相容副属性)
 // If slot 1 has material K, and slot 2 has material V, the result keeps material K.
-var COMPATIBILITY = (window.alchemy_config && window.alchemy_config.COMPATIBILITY) || {
+var COMPATIBILITY = (alchemy_config && alchemy_config.COMPATIBILITY) || {
     "星耀": ["星耀", "花类纤维", "草类纤维", "叶类纤维", "木材", "金", "银", "白银", "铜", "铁", "钢", "赤铁", "锡", "铅", "铝", "钛", "水晶", "钻石", "宝石", "玉", "石头", "磁石", "魔性物质", "结晶体", "兽皮", "羽毛", "甲壳", "兽骨", "尼龙"],
     "宝石": ["宝石", "白银", "玉", "金", "银", "铜", "铁", "钢", "水晶", "钻石", "钛", "木材", "兽骨"],
     "白银": ["白银", "玉", "赤铁", "木材", "兽皮", "铜", "铁", "钢", "锡"],
@@ -35,7 +263,7 @@ var COMPATIBILITY = (window.alchemy_config && window.alchemy_config.COMPATIBILIT
 };
 
 // Costs for books (炼金百科)
-var BOOK_COSTS = (window.alchemy_config && window.alchemy_config.BOOK_COSTS) || {
+var BOOK_COSTS = (alchemy_config && alchemy_config.BOOK_COSTS) || {
     0: 0,
     1: 10,
     2: 50,
@@ -43,28 +271,28 @@ var BOOK_COSTS = (window.alchemy_config && window.alchemy_config.BOOK_COSTS) || 
     4: 800
 };
 
-var BOOK_SOURCES = (window.alchemy_config && window.alchemy_config.BOOK_SOURCES) || {
+var BOOK_SOURCES = (alchemy_config && alchemy_config.BOOK_SOURCES) || {
     2: ["商城 8绑定钻石", "商城 75紫钻"],
     4: ["商城 125紫钻"]
 };
 
 // Penalties for jumping levels (跳级几率惩罚)
-var JUMP_PENALTIES = (window.alchemy_config && window.alchemy_config.JUMP_PENALTIES) || {
+var JUMP_PENALTIES = (alchemy_config && alchemy_config.JUMP_PENALTIES) || {
     0: 0,       // +0 jump (平合, success rate is ~95%)
     1: 1500,    // +1 jump (moderate risk, success rate is ~50%)
     2: 8000,    // +2 jump (high risk, success rate is ~10-15%)
     3: 50000    // +3 jump (extreme risk, success rate is ~2%)
 };
 
-var ADVANCED_ALCHEMY_BASE_BONUS = (window.alchemy_config && window.alchemy_config.ADVANCED_ALCHEMY_BASE_BONUS) || 4;
+var ADVANCED_ALCHEMY_BASE_BONUS = (alchemy_config && alchemy_config.ADVANCED_ALCHEMY_BASE_BONUS) || 4;
 
-var CRAFT_NAME_ALIASES = (window.alchemy_config && window.alchemy_config.CRAFT_NAME_ALIASES) || {
+var CRAFT_NAME_ALIASES = (alchemy_config && alchemy_config.CRAFT_NAME_ALIASES) || {
     "魔法牙隋粉": "魔法牙髓粉",
     "龙鳞魔随": "龙鳞魔髓"
 };
 
 function getBookSourceText(book) {
-    const sources = BOOK_SOURCES[book] || [];
+    var sources = BOOK_SOURCES[book] || [];
     return sources.length > 0 ? `来源: ${sources.join(" / ")}` : "来源: 暂未收录";
 }
 
@@ -98,9 +326,11 @@ function getItemSearchAliases(item) {
 }
 
 function hasDisabledMaterialSlot(item) {
-    // If enabledMaterials is not defined globally, fallback to allowing all
-    const activeMaterials = typeof enabledMaterials !== 'undefined' ? enabledMaterials : new Set(ALL_EQUIPMENT_MATERIALS);
-    return getItemMaterialSlots(item).some(material => !activeMaterials.has(material));
+    // Only block equipment materials that are explicitly disabled; allow道具/材料
+    var activeMaterials = typeof enabledMaterials !== 'undefined' ? enabledMaterials : new Set(ALL_EQUIPMENT_MATERIALS);
+    return getItemMaterialSlots(item).some(function(material) {
+        return ALL_EQUIPMENT_MATERIALS.indexOf(material) !== -1 && !activeMaterials.has(material);
+    });
 }
 
 function isSelfProvidedUnknownSourceItem(item) {
@@ -115,7 +345,7 @@ function isSelfProvidedUnknownSourceItem(item) {
 }
 
 function getBookLevelFromName(name) {
-    const match = String(name || "").match(/^炼金百科([一二三四])$/);
+    var match = String(name || "").match(/^炼金百科([一二三四])$/);
     if (!match) return 0;
     return "一二三四".indexOf(match[1]) + 1;
 }
@@ -127,16 +357,16 @@ function normalizeCraftItemName(name) {
 function getAdvancedAlchemyLevelRange(level1, level2, book = 0, secondaryItem = null) {
     // Level-down with 属性杂物: narrow range to avoid unwanted equipment
     if (secondaryItem && secondaryItem.name && secondaryItem.name.includes("属性杂物")) {
-        const baseLevel = Math.min(level1, level2);
-        const bookBonus = book === 0 ? 0 : book + 1;
+        var baseLevel = Math.min(level1, level2);
+        var bookBonus = book === 0 ? 0 : book + 1;
         return {
             min: 2,
             max: baseLevel + ADVANCED_ALCHEMY_BASE_BONUS - 1 + bookBonus
         };
     }
     // Normal alchemy range
-    const baseLevel = Math.min(level1, level2);
-    const downgradeRange = baseLevel >= 8 ? 7 : 3;
+    var baseLevel = Math.min(level1, level2);
+    var downgradeRange = baseLevel >= 8 ? 7 : 3;
     return {
         min: Math.max(2, baseLevel - downgradeRange),
         max: baseLevel + ADVANCED_ALCHEMY_BASE_BONUS + book
@@ -144,7 +374,11 @@ function getAdvancedAlchemyLevelRange(level1, level2, book = 0, secondaryItem = 
 }
 
 function isEquipmentCandidate(item) {
-    return Boolean(item && item.req_level > 0 && item.type && item.category);
+    // Must be marked as alchemy output (flag 1 or 3), have valid type/category.
+    // req_level>0 for equipment, or (material && level>0) for道具/材料 with alchemy_flag=3
+    return Boolean(item && item.type && item.category
+        && (item.alchemy_flag === 3 || item.alchemy_flag === 1)
+        && (item.req_level > 0 || (item.material && item.level > 0)));
 }
 
 
@@ -152,71 +386,66 @@ function isEquipmentCandidate(item) {
 function getAlchemyResultCandidates(primaryItem, secondaryItem, book = 0, targetItem = null) {
     if (!primaryItem || !secondaryItem) return [];
     
-    const range = getAdvancedAlchemyLevelRange(primaryItem.level, secondaryItem.level, book);
+    var range = getAdvancedAlchemyLevelRange(primaryItem.level, secondaryItem.level, book);
     
-    const activeMaterials = typeof enabledMaterials !== 'undefined' ? enabledMaterials : new Set(ALL_EQUIPMENT_MATERIALS);
-    const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
+    var itemsDb = getDB();
 
-    const secondaryMaterial = String(secondaryItem.material || "").trim();
+    var secondaryMaterial = String(secondaryItem.material || "").trim();
 
-    // Step 1: filter by type, material, level range, active materials
-    let candidates = itemsDb.filter(item => {
-        const isCompoundingCandidate = (item.req_level > 0) || (item.category === "矿物类");
-        if (!isCompoundingCandidate) return false;
+    // Step 1: filter by type, material, level range
+    var candidates = itemsDb.filter(item => {
+        if (!isEquipmentCandidate(item)) return false;
         if (item.material !== primaryItem.material) return false;
         if (item.level < range.min || item.level > range.max) return false;
-        if (!activeMaterials.has(item.material)) return false;
-
-        const itemSlots = getItemMaterialSlots(item);
-        if (itemSlots.some(material => !activeMaterials.has(material))) return false;
-
         return true;
     });
 
-    // Step 2: key rule — if secondary material matches any candidate's sub-material,
-    // it's a "key" that locks candidates to only those requiring that sub-material.
-    // If it matches none, it's "trash" (杂物) with no filtering effect.
-    const hasMatchingSub = candidates.some(item => {
-        const subs = getItemMaterialSlots(item).slice(1);
-        return subs.includes(secondaryMaterial);
-    });
-    if (hasMatchingSub) {
-        candidates = candidates.filter(item => {
-            const subs = getItemMaterialSlots(item).slice(1);
-            return subs.includes(secondaryMaterial);
-        });
-    }
-
-    // Step 3: all item sub-materials must be covered by input materials
-    const inputMaterials = [primaryItem.material, secondaryItem.material].map(x => String(x || "").trim()).filter(Boolean);
+    // Step 2: build input materials, then check sub-material coverage first
+    var inputMaterials = [primaryItem.material, secondaryItem.material].map(x => String(x || "").trim()).filter(Boolean);
     if (targetItem) {
-        const targetSlots = getItemMaterialSlots(targetItem);
+        var targetSlots = getItemMaterialSlots(targetItem);
         if (targetSlots.length > 2) {
-            for (let i = 2; i < targetSlots.length; i++) {
+            for (var i = 2; i < targetSlots.length; i++) {
                 inputMaterials.push(targetSlots[i]);
             }
         }
     }
 
-    return candidates.filter(item => {
-        const itemSlots = getItemMaterialSlots(item);
+    candidates = candidates.filter(item => {
+        var itemSlots = getItemMaterialSlots(item);
         return itemSlots.every(mat => inputMaterials.includes(mat));
-    }).sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
+    });
+
+    // Step 3: key rule — among surviving candidates, if secondary material
+    // matches any candidate's sub-material, lock to only those matching.
+    // If it matches none, all survivors pass through (single-material fallback).
+    var hasMatchingSub = candidates.some(item => {
+        var subs = getItemMaterialSlots(item).slice(1);
+        return subs.includes(secondaryMaterial);
+    });
+    if (hasMatchingSub) {
+        candidates = candidates.filter(item => {
+            var subs = getItemMaterialSlots(item).slice(1);
+            return subs.includes(secondaryMaterial);
+        });
+    }
+
+    return candidates.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
 }
 
 function getRecipeCertainty(primaryItem, secondaryItem, book = 0, targetItem = null) {
-    const candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, book, targetItem);
-    const hits = targetItem ? candidates.filter(item => item.name === targetItem.name) : [];
+    var candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, book, targetItem);
+    var hits = targetItem ? candidates.filter(item => item.name === targetItem.name) : [];
     
     if (targetItem && hits.length === 0) {
         return { rate: 0, candidates };
     }
     
-    const candidatesAtTargetLevel = targetItem 
+    var candidatesAtTargetLevel = targetItem 
         ? candidates.filter(item => item.level === targetItem.level) 
         : candidates;
         
-    const rate = candidatesAtTargetLevel.length > 0 ? Math.round(100 / candidatesAtTargetLevel.length) : 0;
+    var rate = candidatesAtTargetLevel.length > 0 ? Math.round(100 / candidatesAtTargetLevel.length) : 0;
     return { rate, candidates };
 }
 
@@ -224,7 +453,7 @@ function isTargetInAdvancedAlchemyRange(primaryItem, secondaryItem, book, target
     if (!primaryItem || !secondaryItem || !targetItem) return false;
     if (primaryItem.material !== targetItem.material) return false;
     
-    const range = getAdvancedAlchemyLevelRange(primaryItem.level, secondaryItem.level, book);
+    var range = getAdvancedAlchemyLevelRange(primaryItem.level, secondaryItem.level, book);
     return targetItem.level >= range.min && targetItem.level <= range.max;
 }
 
@@ -245,17 +474,17 @@ function isBetterPathNode(existingNode, nextCost, nextBook, nextJump) {
 
 function parseRecommendedFormula(formula) {
     if (!formula) return [];
-    const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
+    var itemsDb = getDB();
     
     return formula
         .split(/[+＋]/)
         .map(part => part.trim())
         .filter(Boolean)
         .map(part => {
-            const bookMatch = part.match(/^炼金百科([一二三四1-4])$/);
+            var bookMatch = part.match(/^炼金百科([一二三四1-4])$/);
             if (bookMatch) {
-                const rawLevel = bookMatch[1];
-                const bookLevel = "一二三四".includes(rawLevel)
+                var rawLevel = bookMatch[1];
+                var bookLevel = "一二三四".includes(rawLevel)
                     ? "一二三四".indexOf(rawLevel) + 1
                     : parseInt(rawLevel, 10);
                 return {
@@ -267,9 +496,9 @@ function parseRecommendedFormula(formula) {
                 };
             }
             
-            const itemMatch = part.match(/^(?:(\d+)\s*)?(.+)$/);
-            const refName = itemMatch ? itemMatch[2].trim() : part;
-            const item = itemsDb.find(x => getItemSearchAliases(x).includes(refName));
+            var itemMatch = part.match(/^(?:(\d+)\s*)?(.+)$/);
+            var refName = itemMatch ? itemMatch[2].trim() : part;
+            var item = itemsDb.find(x => getItemSearchAliases(x).includes(refName));
             return {
                 name: refName,
                 level: item ? item.level : null,
@@ -282,7 +511,7 @@ function parseRecommendedFormula(formula) {
 }
 
 function buildItemDataMaterialReferenceTree(targetItem) {
-    const slots = getItemMaterialSlots(targetItem);
+    var slots = getItemMaterialSlots(targetItem);
     if (!targetItem || targetItem.material_source !== "ItemData_C.bin" || slots.length < 2) return null;
     
     return {
@@ -303,12 +532,15 @@ function buildItemDataMaterialReferenceTree(targetItem) {
     };
 }
 
+// 非合成来源树（dungeon/gacha/mall 等无法合成的物品）- 已在文件顶部定义
+// function buildNonSynthSourceTree(targetItem) { ... }
+
 function buildReferenceTree(targetItem) {
     if (!targetItem) return null;
     if (!targetItem.recommended_formula) {
         return buildItemDataMaterialReferenceTree(targetItem);
     }
-    const children = parseRecommendedFormula(targetItem.recommended_formula);
+    var children = parseRecommendedFormula(targetItem.recommended_formula);
     if (children.length === 0) return buildItemDataMaterialReferenceTree(targetItem);
     
     return {
@@ -326,36 +558,36 @@ function buildReferenceTree(targetItem) {
 // Calculate single recipe exact probability of getting targetItem using fallback mapping
 function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     if (!recipe || !recipe.node1 || !recipe.node2) return 0;
-    const primaryItem = recipe.node1.item;
-    const secondaryItem = recipe.node2.item;
-    const book = recipe.book;
+    var primaryItem = recipe.node1.item;
+    var secondaryItem = recipe.node2.item;
+    var book = recipe.book;
     
-    const fallbackTarget = typeof selectedItem !== 'undefined' ? selectedItem : null;
-    const target = targetItem || recipe.targetItem || fallbackTarget;
+    var fallbackTarget = typeof selectedItem !== 'undefined' ? selectedItem : null;
+    var target = targetItem || recipe.targetItem || fallbackTarget;
     if (!primaryItem || !secondaryItem || !target) return 0;
     
-    const L_min = Math.min(primaryItem.level, secondaryItem.level);
-    const B = book;
+    var L_min = Math.min(primaryItem.level, secondaryItem.level);
+    var B = book;
     
-    const candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
+    var candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
     if (candidates.length === 0) return 0;
     
-    const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
-    const maxLevel = L_min + B + 4;
+    var downgradeRange = L_min >= 8 ? 7 : 3;
+    var minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
+    var maxLevel = L_min + B + 4;
     
-    const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
+    var levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
-    let targetProb = 0;
-    for (let L = minLevel; L <= maxLevel; L++) {
-        const climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
-        const prob = getDeltaProb(climb, downgradeRange);
+    var targetProb = 0;
+    for (var L = minLevel; L <= maxLevel; L++) {
+        var climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
+        var prob = getDeltaProb(climb, downgradeRange);
         if (prob <= 0) continue;
         
-        const validCandidates = levelToCandidates[L];
+        var validCandidates = levelToCandidates[L];
         if (validCandidates && validCandidates.length > 0) {
-            const splitProb = prob / validCandidates.length;
-            const hasTarget = validCandidates.some(item => item.name === target.name);
+            var splitProb = prob / validCandidates.length;
+            var hasTarget = validCandidates.some(item => item.name === target.name);
             if (hasTarget) {
                 targetProb += splitProb;
             }
@@ -384,23 +616,23 @@ function getDeltaProb(climb, downgradeRange = 7) {
 
 // Map output level to candidates with fallback handling
 function buildLevelToCandidatesMapping(candidates, minLevel, maxLevel) {
-    const levelToCandidates = {};
-    for (let L = maxLevel; L >= minLevel; L--) {
-        const atLevel = candidates.filter(item => item.level === L);
+    var levelToCandidates = {};
+    for (var L = maxLevel; L >= minLevel; L--) {
+        var atLevel = candidates.filter(item => item.level === L);
         if (atLevel.length > 0) {
             levelToCandidates[L] = atLevel;
         } else {
-            let fallbackLevel = -1;
-            for (let L_prev = L - 1; L_prev >= minLevel; L_prev--) {
-                const atLevelPrev = candidates.filter(item => item.level === L_prev);
+            var fallbackLevel = -1;
+            for (var L_prev = L - 1; L_prev >= minLevel; L_prev--) {
+                var atLevelPrev = candidates.filter(item => item.level === L_prev);
                 if (atLevelPrev.length > 0) {
                     fallbackLevel = L_prev;
                     break;
                 }
             }
             if (fallbackLevel === -1) {
-                for (let L_next = L + 1; L_next <= maxLevel; L_next++) {
-                    const atLevelNext = candidates.filter(item => item.level === L_next);
+                for (var L_next = L + 1; L_next <= maxLevel; L_next++) {
+                    var atLevelNext = candidates.filter(item => item.level === L_next);
                     if (atLevelNext.length > 0) {
                         fallbackLevel = L_next;
                         break;
@@ -417,42 +649,42 @@ function buildLevelToCandidatesMapping(candidates, minLevel, maxLevel) {
 
 function getRecipeOutcomeBreakdown(recipe, targetItem = null) {
     if (!recipe || !recipe.node1 || !recipe.node2) return "";
-    const primaryItem = recipe.node1.item;
-    const secondaryItem = recipe.node2.item;
-    const book = recipe.book;
+    var primaryItem = recipe.node1.item;
+    var secondaryItem = recipe.node2.item;
+    var book = recipe.book;
     
-    const fallbackTarget = typeof selectedItem !== 'undefined' ? selectedItem : null;
-    const target = targetItem || recipe.targetItem || fallbackTarget;
+    var fallbackTarget = typeof selectedItem !== 'undefined' ? selectedItem : null;
+    var target = targetItem || recipe.targetItem || fallbackTarget;
     if (!primaryItem || !secondaryItem || !target) return "";
     
-    const L_min = Math.min(primaryItem.level, secondaryItem.level);
-    const B = book;
+    var L_min = Math.min(primaryItem.level, secondaryItem.level);
+    var B = book;
     
-    const candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
+    var candidates = getAlchemyResultCandidates(primaryItem, secondaryItem, B, target);
     if (candidates.length === 0) return "";
     
-    const downgradeRange = L_min >= 8 ? 7 : 3;
-    const minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
-    const maxLevel = L_min + B + 4;
+    var downgradeRange = L_min >= 8 ? 7 : 3;
+    var minLevel = Math.max(1, L_min + B - downgradeRange);  // output range includes百科 shift
+    var maxLevel = L_min + B + 4;
     
-    const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
+    var levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
     
-    const itemProbabilities = {};
-    for (let L = minLevel; L <= maxLevel; L++) {
-        const climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
-        const prob = getDeltaProb(climb, downgradeRange);
+    var itemProbabilities = {};
+    for (var L = minLevel; L <= maxLevel; L++) {
+        var climb = L - (L_min + B);  // alchemy jump (百科 bonus added separately)
+        var prob = getDeltaProb(climb, downgradeRange);
         if (prob <= 0) continue;
         
-        const validCandidates = levelToCandidates[L];
+        var validCandidates = levelToCandidates[L];
         if (validCandidates && validCandidates.length > 0) {
-            const splitProb = prob / validCandidates.length;
+            var splitProb = prob / validCandidates.length;
             validCandidates.forEach(item => {
                 itemProbabilities[item.name] = (itemProbabilities[item.name] || 0) + splitProb;
             });
         }
     }
     
-    const sortedItems = Object.entries(itemProbabilities)
+    var sortedItems = Object.entries(itemProbabilities)
         .map(([name, prob]) => ({ name, rate: Math.round(prob * 100) }))
         .filter(item => item.rate > 0)
         .sort((a, b) => b.rate - a.rate);
@@ -475,12 +707,12 @@ function getRecipeOutcomeBreakdown(recipe, targetItem = null) {
 
 function getAlternativeNames(material, level, currentName, enabledSources = { convenience: false }) {
     if (!currentName) return "";
-    const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
+    var itemsDb = getDB();
     
-    const matches = itemsDb.filter(item => {
+    var matches = itemsDb.filter(item => {
         if (item.material !== material || item.level !== level || item.name === currentName) return false;
         
-        const isStore = item.source && (item.source.includes("8-12") || item.source.includes("便利店"));
+        var isStore = item.source && (item.source.includes("8-12") || item.source.includes("便利店"));
         if (isStore && !enabledSources.convenience) {
             return false;
         }
@@ -492,7 +724,7 @@ function getAlternativeNames(material, level, currentName, enabledSources = { co
         return true;
     });
     if (matches.length > 0) {
-        const names = matches.slice(0, 2).map(item => item.name);
+        var names = matches.slice(0, 2).map(item => item.name);
         return `(或${names.join('/')})`;
     }
     return "";
@@ -505,50 +737,51 @@ function getAlternativeNames(material, level, currentName, enabledSources = { co
 function getAlchemyResultCandidatesMulti(ingredients, book = 0) {
     if (!ingredients || ingredients.length < 2) return [];
     
-    const primaryItem = ingredients[0];
-    const primaryMaterial = primaryItem.material;
+    var primaryItem = ingredients[0];
+    var primaryMaterial = primaryItem.material;
     
-    const levels = ingredients.map(item => item.level);
-    const L_min = Math.min(...levels);
-    const range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, book);
-    const minLevel = range.min;
-    const maxLevel = range.max;
+    var levels = ingredients.map(item => item.level);
+    var L_min = Math.min(...levels);
+    var range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, book);
+    var minLevel = range.min;
+    var maxLevel = range.max;
 
-    const inputMaterials = ingredients.map(item => String(item.material || "").trim()).filter(Boolean);
-    const secondaryMaterials = inputMaterials.slice(1); // Non-primary materials
+    var inputMaterials = ingredients.map(item => String(item.material || "").trim()).filter(Boolean);
+    var secondaryMaterials = inputMaterials.slice(1); // Non-primary materials
 
-    const itemsDb = typeof db !== 'undefined' ? db : (window.alchemy_db || []);
+    var itemsDb = getDB();
 
     // Step 1: filter by material + level range
     // Use binary alchemy_flag (fields_offset+109): 0x03 = can be alchemy output
-    let candidates = itemsDb.filter(item => {
+    var candidates = itemsDb.filter(item => {
         if (!item.material || item.material !== primaryMaterial) return false;
         if (item.level < minLevel || item.level > maxLevel) return false;
-        if (item.alchemy_flag !== 0x03 && item.alchemy_flag !== 0x01) return false;
+        if (!isEquipmentCandidate(item)) return false;
         return true;
     });
 
-    // Step 2: key rule — if a secondary material matches any candidate's sub-material,
-    // it's a "key" that locks candidates to only those requiring that sub-material.
-    // If it matches none, it's "trash" (杂物) with no filtering effect.
-    for (const secMat of secondaryMaterials) {
-        const hasMatch = candidates.some(item => {
-            const subs = getItemMaterialSlots(item).slice(1);
+    // Step 2: filter by sub-material coverage first — all item sub-materials
+    // must be covered by input materials before checking key rule
+    candidates = candidates.filter(item => {
+        var itemSlots = getItemMaterialSlots(item);
+        return itemSlots.every(mat => inputMaterials.includes(mat));
+    });
+
+    // Step 3: key rule — among surviving candidates, if a secondary material
+    // matches any candidate's sub-material, lock to only those matching.
+    // If it matches none, all survivors pass through (single-material fallback).
+    for (var secMat of secondaryMaterials) {
+        var hasMatch = candidates.some(item => {
+            var subs = getItemMaterialSlots(item).slice(1);
             return subs.includes(secMat);
         });
         if (hasMatch) {
             candidates = candidates.filter(item => {
-                const subs = getItemMaterialSlots(item).slice(1);
+                var subs = getItemMaterialSlots(item).slice(1);
                 return subs.includes(secMat);
             });
         }
     }
-
-    // Step 3: all item sub-materials must be covered by input materials
-    candidates = candidates.filter(item => {
-        const itemSlots = getItemMaterialSlots(item);
-        return itemSlots.every(mat => inputMaterials.includes(mat));
-    });
 
     return candidates.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, "zh-Hans-CN"));
 }
@@ -556,30 +789,30 @@ function getAlchemyResultCandidatesMulti(ingredients, book = 0) {
 function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     if (!ingredients || ingredients.length < 2) return [];
     
-    const primaryItem = ingredients[0];
-    const levels = ingredients.map(item => item.level);
-    const L_min = Math.min(...levels);
-    const B = book;
+    var primaryItem = ingredients[0];
+    var levels = ingredients.map(item => item.level);
+    var L_min = Math.min(...levels);
+    var B = book;
     
-    const candidates = getAlchemyResultCandidatesMulti(ingredients, B);
+    var candidates = getAlchemyResultCandidatesMulti(ingredients, B);
     if (candidates.length === 0) return [];
 
-    const range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, B);
-    const minLevel = range.min;
-    const maxLevel = range.max;
-    const downgradeRange = L_min >= 8 ? 7 : 3;
+    var range = getAdvancedAlchemyLevelRange(primaryItem.level, L_min, B);
+    var minLevel = range.min;
+    var maxLevel = range.max;
+    var downgradeRange = L_min >= 8 ? 7 : 3;
 
-    const levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
+    var levelToCandidates = buildLevelToCandidatesMapping(candidates, minLevel, maxLevel);
 
-    const itemProbabilities = {};
-    for (let L = minLevel; L <= maxLevel; L++) {
-        const climb = L - (L_min + B);
-        const prob = getDeltaProb(climb, downgradeRange);
+    var itemProbabilities = {};
+    for (var L = minLevel; L <= maxLevel; L++) {
+        var climb = L - (L_min + B);
+        var prob = getDeltaProb(climb, downgradeRange);
         if (prob <= 0) continue;
         
-        const validCandidates = levelToCandidates[L];
+        var validCandidates = levelToCandidates[L];
         if (validCandidates && validCandidates.length > 0) {
-            const splitProb = prob / validCandidates.length;
+            var splitProb = prob / validCandidates.length;
             validCandidates.forEach(item => {
                 itemProbabilities[item.name] = (itemProbabilities[item.name] || 0) + splitProb;
             });
@@ -588,7 +821,7 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
     
     return Object.entries(itemProbabilities)
         .map(([name, prob]) => {
-            const candidateItem = candidates.find(item => item.name === name);
+            var candidateItem = candidates.find(item => item.name === name);
             return {
                 name,
                 rate: Math.round(prob * 100),
@@ -608,26 +841,31 @@ function getRecipeOutcomeBreakdownMulti(ingredients, book = 0) {
 // Merged from app.js (production, incl. level-up/down)
 function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAll = false) {
     if (targetItem && !isEquipmentCandidate(targetItem)) {
+        // Can't be alchemy output; only show path if it has a craft recipe
+        if (!targetItem.crafted_from) {
+            var sourceTree = buildNonSynthSourceTree(targetItem);
+            return returnAll ? { tree: sourceTree, recipes: [] } : sourceTree;
+        }
         maxBook = 0;
     }
     // Items without any verified synthesis/craft path: show source-info tree
     if (targetItem && targetItem.obtain_method && NO_OBTAIN_PATH_METHODS.has(targetItem.obtain_method)) {
-        const sourceTree = buildNonSynthSourceTree(targetItem);
+        var sourceTree = buildNonSynthSourceTree(targetItem);
         if (returnAll) {
             return { tree: sourceTree, recipes: [] };
         }
         return sourceTree;
     }
 
-    const representatives = getRepresentatives();
-    const dp = {}; // Key: `${material}_${level}`, Value: StateNode
+    var representatives = getRepresentatives(enabledSources);
+    var dp = {}; // Key: `${material}_${level}`, Value: StateNode
     
     // Step 1: Extract all valid existing states in the database
-    const states = [];
-    const stateKeys = new Set();
-    db.forEach(item => {
+    var states = [];
+    var stateKeys = new Set();
+    getDB().forEach(item => {
         if (item.material && item.level > 0) {
-            const key = `${item.material}_${item.level}`;
+            var key = `${item.material}_${item.level}`;
             if (!stateKeys.has(key)) {
                 stateKeys.add(key);
                 states.push({ material: item.material, level: item.level });
@@ -639,9 +877,9 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
     states.sort((a, b) => a.level - b.level);
     
     // Helper to get base/obtaining cost of a specific item
-    const getBaseCost = (item) => {
+    var getBaseCost = (item) => {
         // If source is empty, try source_display and recommended_formula as fallback
-        const effectiveSource = item.source || item.source_display || item.recommended_formula || "";
+        var effectiveSource = item.source || item.source_display || item.recommended_formula || "";
         if (!effectiveSource) {
             return isSelfProvidedUnknownSourceItem(item) ? Math.max(10, (item.level || 1) * 10) : Infinity;
         }
@@ -654,11 +892,11 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
         }
 
         // Match both English colons (:) and Chinese colons (：), as well as both "商店" and "购买" keywords
-        const isShop = effectiveSource.includes("商店:") || effectiveSource.includes("商店：") ||
+        var isShop = effectiveSource.includes("商店:") || effectiveSource.includes("商店：") ||
                        effectiveSource.includes("购买:") || effectiveSource.includes("购买：") ||
                        effectiveSource.includes("购买") && !effectiveSource.includes("8-12");
-        const isMine = effectiveSource.includes("采集:") || effectiveSource.includes("采集：");
-        const isDrop = effectiveSource.includes("掉落:") || effectiveSource.includes("掉落：");
+        var isMine = effectiveSource.includes("采集:") || effectiveSource.includes("采集：");
+        var isDrop = effectiveSource.includes("掉落:") || effectiveSource.includes("掉落：");
         
         if (isShop && !enabledSources.shop) return Infinity;
         if (isMine && !enabledSources.mine) return Infinity;
@@ -666,7 +904,7 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
         
         // Cost estimation:
         if (isShop) {
-            const goldMatch = effectiveSource.match(/(\d+)金币/);
+            var goldMatch = effectiveSource.match(/(\d+)金币/);
             return goldMatch ? parseInt(goldMatch[1]) : (item.level || 1) * 10 + 60;
         }
         if (isMine) {
@@ -680,13 +918,13 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
     
     // Initialize base costs
     states.forEach(st => {
-        const key = `${st.material}_${st.level}`;
-        const rep = representatives[key];
-        let minCost = Infinity;
-        let method = "none";
+        var key = `${st.material}_${st.level}`;
+        var rep = representatives[key];
+        var minCost = Infinity;
+        var method = "none";
         
-        // Only load base cost if material attribute is active
-        if (enabledMaterials.has(st.material)) {
+        // Load base cost even for non-equipment materials (道具/材料)
+        if (enabledMaterials.has(st.material) || ALL_EQUIPMENT_MATERIALS.indexOf(st.material) === -1) {
             if (rep) {
                 minCost = getBaseCost(rep);
                 if (minCost !== Infinity) {
@@ -706,24 +944,24 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
     });
     
     // Resolve crafting recipes recursively (Make.dat)
-    let calcCraftCost = null;
+    var calcCraftCost = null;
     if (enabledSources.craft) {
-        const resolvedCraft = {};
+        var resolvedCraft = {};
         
         calcCraftCost = (itemName, depth = 0) => {
             if (depth > 6) return Infinity;
-            const normalizedItemName = normalizeCraftItemName(itemName);
+            var normalizedItemName = normalizeCraftItemName(itemName);
             if (resolvedCraft[normalizedItemName] !== undefined) return resolvedCraft[normalizedItemName];
             
             // Find item object
-            const item = db.find(x => x.name === normalizedItemName);
+            var item = getDB().find(x => x.name === normalizedItemName);
             if (!item) return Infinity;
             
             // Skip if material is blacklisted
-            if (item.material && !enabledMaterials.has(item.material)) return Infinity;
+            if (ALL_EQUIPMENT_MATERIALS.indexOf(item.material) !== -1 && !enabledMaterials.has(item.material)) return Infinity;
             
             // If it is directly obtainable base item
-            const baseCost = getBaseCost(item);
+            var baseCost = getBaseCost(item);
             if (baseCost !== Infinity) {
                 resolvedCraft[normalizedItemName] = baseCost;
                 return baseCost;
@@ -735,10 +973,10 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             
             // If it has a recipe
             if (item.crafted_from) {
-                let cost = 30; // tool/furnace fee
-                let ok = true;
-                for (let ing of item.crafted_from.ingredients) {
-                    const ingCost = calcCraftCost(ing.name, depth + 1);
+                var cost = 30; // tool/furnace fee
+                var ok = true;
+                for (var ing of item.crafted_from.ingredients) {
+                    var ingCost = calcCraftCost(ing.name, depth + 1);
                     if (ingCost === Infinity) {
                         ok = false;
                         break;
@@ -757,11 +995,12 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
         
         // Update states that can be crafted
         states.forEach(st => {
-            if (!enabledMaterials.has(st.material)) return;
-            const key = `${st.material}_${st.level}`;
-            const rep = representatives[key];
+            // Only skip equipment materials that are explicitly disabled
+            if (ALL_EQUIPMENT_MATERIALS.indexOf(st.material) !== -1 && !enabledMaterials.has(st.material)) return;
+            var key = `${st.material}_${st.level}`;
+            var rep = representatives[key];
             if (rep && rep.crafted_from) {
-                const craftCost = calcCraftCost(rep.name);
+                var craftCost = calcCraftCost(rep.name);
                 if (craftCost < dp[key].cost || dp[key].cost === Infinity) {
                     dp[key].cost = craftCost;
                     dp[key].method = "craft";
@@ -771,9 +1010,10 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             }
         });
 
-        if (targetItem.crafted_from && targetItem.material && enabledMaterials.has(targetItem.material)) {
-            const key = `${targetItem.material}_${targetItem.level}`;
-            const craftCost = calcCraftCost(targetItem.name);
+        if (targetItem.crafted_from && targetItem.material 
+            && (ALL_EQUIPMENT_MATERIALS.indexOf(targetItem.material) === -1 || enabledMaterials.has(targetItem.material))) {
+            var key = `${targetItem.material}_${targetItem.level}`;
+            var craftCost = calcCraftCost(targetItem.name);
             if (dp[key] && craftCost !== Infinity) {
                 dp[key].cost = craftCost;
                 dp[key].method = "craft";
@@ -783,22 +1023,23 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
         }
     }
 
-    const targetKey = `${targetItem.material}_${targetItem.level}`;
+    var targetKey = `${targetItem.material}_${targetItem.level}`;
 
     // Step 2: Run DAG DP (solving in increasing order of level)
-    for (let i = 0; i < states.length; i++) {
-        const u = states[i];
-        if (!enabledMaterials.has(u.material)) continue; // Skip blacklisted material compounding
+    for (var i = 0; i < states.length; i++) {
+        var u = states[i];
+        // Only skip equipment materials that are explicitly disabled
+        if (ALL_EQUIPMENT_MATERIALS.indexOf(u.material) !== -1 && !enabledMaterials.has(u.material)) continue;
         
-        const key_u = `${u.material}_${u.level}`;
-        const node_u = dp[key_u];
+        var key_u = `${u.material}_${u.level}`;
+        var node_u = dp[key_u];
         
         // If the current state is the target and the target cannot be compounded, do not relax it via compounding
         if (key_u === targetKey && targetItem && isStrictlyCraftOnly(targetItem)) {
             continue;
         }
         
-        const outputItem = (key_u === targetKey) ? targetItem : representatives[key_u];
+        var outputItem = (key_u === targetKey) ? targetItem : representatives[key_u];
         if (outputItem && !isEquipmentCandidate(outputItem)) {
             if (key_u !== targetKey) {
                 continue;
@@ -810,39 +1051,39 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
         
         // Try to compound node_u from lower level states.
         // Advanced alchemy range: min(input levels)-7 through min(input levels)+4+book.
-        const L = u.level;
-        let m2List = COMPATIBILITY[u.material] || [u.material];
-        const rep = (key_u === targetKey) ? targetItem : representatives[key_u];
-        const materialSlotCount = getItemMaterialSlots(rep).length;
-        const requiresThirdMaterial = materialSlotCount === 3;
-        const hasUnsupportedMaterialCount = materialSlotCount > 3;
+        var L = u.level;
+        var m2List = COMPATIBILITY[u.material] || [u.material];
+        var rep = (key_u === targetKey) ? targetItem : representatives[key_u];
+        var materialSlotCount = getItemMaterialSlots(rep).length;
+        var requiresThirdMaterial = materialSlotCount === 3;
+        var hasUnsupportedMaterialCount = materialSlotCount > 3;
         if (hasUnsupportedMaterialCount) continue;
         if (rep && rep.sub_material1) {
-            const sub_m = rep.sub_material1.trim();
+            var sub_m = rep.sub_material1.trim();
             if (sub_m) {
                 m2List = [sub_m];
             }
         }
         
-        for (let B = 0; B <= maxBook; B++) {
+        for (var B = 0; B <= maxBook; B++) {
             if (!requiresThirdMaterial) {
-            const minBaseLevel = Math.max(1, L - getAlchemyBaseBonus() - B);
-            const maxBaseLevel = L - 1;
-            for (let L1 = minBaseLevel; L1 < L; L1++) {
-                const key_slot1_adv = `${u.material}_${L1}`;
-                const node_slot1_adv = dp[key_slot1_adv];
+            var minBaseLevel = Math.max(1, L - getAlchemyBaseBonus() - B);
+            var maxBaseLevel = L - 1;
+            for (var L1 = minBaseLevel; L1 < L; L1++) {
+                var key_slot1_adv = `${u.material}_${L1}`;
+                var node_slot1_adv = dp[key_slot1_adv];
                 if (!node_slot1_adv || node_slot1_adv.cost === Infinity || !node_slot1_adv.item) continue;
                 
                 m2List.forEach(m2 => {
-                    if (!enabledMaterials.has(m2)) return;
-                    for (let L2 = minBaseLevel; L2 <= Math.min(L1, maxBaseLevel); L2++) {
-                        const key_slot2_adv = `${m2}_${L2}`;
-                        const node_slot2_adv = dp[key_slot2_adv];
+                    if (ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2)) return;
+                    for (var L2 = minBaseLevel; L2 <= Math.min(L1, maxBaseLevel); L2++) {
+                        var key_slot2_adv = `${m2}_${L2}`;
+                        var node_slot2_adv = dp[key_slot2_adv];
                         if (!node_slot2_adv || node_slot2_adv.cost === Infinity || !node_slot2_adv.item) continue;
                         
                         if (!isTargetInAdvancedAlchemyRange(node_slot1_adv.item, node_slot2_adv.item, B, outputItem)) continue;
                         
-                        const compoundCost = node_slot1_adv.cost + node_slot2_adv.cost + BOOK_COSTS[B];
+                        var compoundCost = node_slot1_adv.cost + node_slot2_adv.cost + BOOK_COSTS[B];
                         if (isBetterPathNode(node_u, compoundCost, B, 0)) {
                             node_u.cost = compoundCost;
                             node_u.method = "compound";
@@ -856,30 +1097,30 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             }
             }
             
-            for (let J = 0; J <= maxJump; J++) {
-                const L_min = L - B - J;
+            for (var J = 0; J <= maxJump; J++) {
+                var L_min = L - B - J;
                 if (L_min < 1) continue;
                 
-                const minL = L_min;
-                for (let L1 = minL; L1 <= minL + 2; L1++) {
+                var minL = L_min;
+                for (var L1 = minL; L1 <= minL + 2; L1++) {
                     if (L1 >= L) continue;
-                    const key_slot1 = `${u.material}_${L1}`;
-                    const node_slot1 = dp[key_slot1];
+                    var key_slot1 = `${u.material}_${L1}`;
+                    var node_slot1 = dp[key_slot1];
                     if (!node_slot1 || node_slot1.cost === Infinity) continue;
                     
                     m2List.forEach(m2 => {
-                        if (!enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
-                        for (let L2 = minL; L2 <= minL + 2; L2++) {
+                        if (ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
+                        for (var L2 = minL; L2 <= minL + 2; L2++) {
                             if (L2 >= L) continue;
                             if (L1 < L2) continue; // Prevent primary attribute shift (吃属)
                             if (Math.min(L1, L2) !== minL) continue;
                             
-                            const key_slot2 = `${m2}_${L2}`;
-                            const node_slot2 = dp[key_slot2];
+                            var key_slot2 = `${m2}_${L2}`;
+                            var node_slot2 = dp[key_slot2];
                             if (!node_slot2 || node_slot2.cost === Infinity) continue;
                             
                             // Calculate compounding cost
-                            const compoundCost = node_slot1.cost + 
+                            var compoundCost = node_slot1.cost + 
                                                  node_slot2.cost + 
                                                  BOOK_COSTS[B] + 
                                                  getJumpPenalty(J);
@@ -897,22 +1138,22 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
                 }
 
         // Level-down compounding logic: check easily obtainable high-level items of the same material
-        const sourceNames = LEVEL_DOWN_SOURCE_NAMES[u.material] || [];
+        var sourceNames = LEVEL_DOWN_SOURCE_NAMES[u.material] || [];
         sourceNames.forEach(name => {
-            const S = db.find(x => x.name === name);
+            var S = getDB().find(x => x.name === name);
             if (S && S.level > u.level) {
-                const S_key = `${u.material}_${S.level}`;
-                const node_S = dp[S_key];
+                var S_key = `${u.material}_${S.level}`;
+                var node_S = dp[S_key];
                 if (node_S && node_S.cost !== Infinity) {
                     // Level-down compounding does not use books (B = 0)
-                    const B = 0;
-                    const X = getAlchemyBaseBonus() - 1;
-                    const L_sub_min = Math.max(1, u.level - X);
+                    var B = 0;
+                    var X = getAlchemyBaseBonus() - 1;
+                    var L_sub_min = Math.max(1, u.level - X);
                     if (L_sub_min <= u.level - 2) {
-                        const junkCost = Math.max(10, L_sub_min * 5);
-                        const compoundCost = node_S.cost + junkCost + BOOK_COSTS[B];
+                        var junkCost = Math.max(10, L_sub_min * 5);
+                        var compoundCost = node_S.cost + junkCost + BOOK_COSTS[B];
                         if (isBetterPathNode(node_u, compoundCost, B, 0)) {
-                            const node_junk = {
+                            var node_junk = {
                                 material: "任意",
                                 level: L_sub_min,
                                 cost: junkCost,
@@ -934,23 +1175,23 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             }
         });
         // Level-up compounding logic: check low-level base items that can be upgraded with safe junk
-        const levelUpSources = LEVEL_UP_SOURCE_NAMES[u.material] || [];
+        var levelUpSources = LEVEL_UP_SOURCE_NAMES[u.material] || [];
         levelUpSources.forEach(src => {
             if (src.level < u.level) {
-                const S_key = `${u.material}_${src.level}`;
-                const node_S = dp[S_key];
+                var S_key = `${u.material}_${src.level}`;
+                var node_S = dp[S_key];
                 if (node_S && node_S.cost !== Infinity) {
-                    const baseBonus = getAlchemyBaseBonus();
-                    const B = 0;
+                    var baseBonus = getAlchemyBaseBonus();
+                    var B = 0;
                     // For level-up with junk: max output = min(src.level, junkLevel) + baseBonus - 1
                     // Using junk at src.level gives max = src.level + baseBonus - 1
-                    const maxReachable = src.level + baseBonus - 1;
+                    var maxReachable = src.level + baseBonus - 1;
                     if (maxReachable >= u.level) {
-                        const junkLevel = src.level;
-                        const junkCost = Math.max(10, junkLevel * 5);
-                        const compoundCost = node_S.cost + junkCost + BOOK_COSTS[B];
+                        var junkLevel = src.level;
+                        var junkCost = Math.max(10, junkLevel * 5);
+                        var compoundCost = node_S.cost + junkCost + BOOK_COSTS[B];
                         if (isBetterPathNode(node_u, compoundCost, B, 0)) {
-                            const node_junk = {
+                            var node_junk = {
                                 material: "任意",
                                 level: junkLevel,
                                 cost: junkCost,
@@ -977,9 +1218,9 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
     }
 
     // Reconstruct the recipe tree for the target item
-    let targetNode = dp[targetKey];
+    var targetNode = dp[targetKey];
     if (targetItem && isStrictlyCraftOnly(targetItem)) {
-        const costVal = (calcCraftCost && enabledSources.craft) ? calcCraftCost(targetItem.name) : Infinity;
+        var costVal = (calcCraftCost && enabledSources.craft) ? calcCraftCost(targetItem.name) : Infinity;
         targetNode = {
             cost: costVal,
             method: "craft",
@@ -1001,23 +1242,23 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             material: targetItem.material
         };
     }
-    const is3Mat = getItemMaterialSlots(targetItem).length === 3;
+    var is3Mat = getItemMaterialSlots(targetItem).length === 3;
     
     if (!is3Mat && (!targetNode || (targetNode.cost === Infinity && targetNode.method !== "craft"))) {
-        const referenceTree = buildReferenceTree(targetItem);
+        var referenceTree = buildReferenceTree(targetItem);
         if (returnAll) {
             return { tree: referenceTree, recipes: [] };
         }
         return referenceTree;
     }
     
-    let tree = null;
+    var tree = null;
     if (targetNode && (targetNode.cost !== Infinity || targetNode.method === "craft")) {
         tree = buildOutputTree(targetNode, representatives, enabledSources);
     }
     
     if (returnAll) {
-        const recipes = getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp, representatives);
+        var recipes = getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp, representatives);
         if (!tree) {
             tree = buildReferenceTree(targetItem);
         }
@@ -1029,20 +1270,18 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
 
 
 // Merged from app.js (production, incl. level-up/down)
-function getRepresentatives() {
-    const reps = {};
-    const enabledSources = {
-        convenience: document.getElementById("src-convenience").checked
-    };
+function getRepresentatives(enabledSources) {
+    var reps = {};
+    var sources = enabledSources || { convenience: true, shop: true, mine: true, drop: true, craft: true };
     
-    db.forEach(item => {
+    getDB().forEach(item => {
         if (!item.material || item.level <= 0) return;
-        const key = `${item.material}_${item.level}`;
+        var key = `${item.material}_${item.level}`;
         
         // Skip convenience store items if the option is disabled
-        const effectiveSrc = item.source || item.source_display || item.recommended_formula || "";
-        const isStore = effectiveSrc.includes("8-12") || effectiveSrc.includes("便利店");
-        if (isStore && !enabledSources.convenience) {
+        var effectiveSrc = item.source || item.source_display || item.recommended_formula || "";
+        var isStore = effectiveSrc.includes("8-12") || effectiveSrc.includes("便利店");
+        if (isStore && !sources.convenience) {
             return;
         }
         
@@ -1051,14 +1290,14 @@ function getRepresentatives() {
             return;
         }
         
-        const currentBest = reps[key];
+        var currentBest = reps[key];
         if (!currentBest) {
             reps[key] = item;
         } else {
-            const hasSrc = (x) => (x.source && x.source.length > 0) || (x.source_display && x.source_display.length > 0) || (x.recommended_formula && x.recommended_formula.length > 0);
-            const isNonAlchemy = (x) => x.crafted_from || hasSrc(x);
-            const itemNonAlc = isNonAlchemy(item);
-            const bestNonAlc = isNonAlchemy(currentBest);
+            var hasSrc = (x) => (x.source && x.source.length > 0) || (x.source_display && x.source_display.length > 0) || (x.recommended_formula && x.recommended_formula.length > 0);
+            var isNonAlchemy = (x) => x.crafted_from || hasSrc(x);
+            var itemNonAlc = isNonAlchemy(item);
+            var bestNonAlc = isNonAlchemy(currentBest);
             
             if (itemNonAlc && !bestNonAlc) {
                 reps[key] = item;
@@ -1080,15 +1319,15 @@ function getRepresentatives() {
 
 // Merged from app.js (production, incl. level-up/down)
 function buildOutputTree(node, representatives, enabledSources) {
-    let displayName = node.item ? node.item.name : `${node.material}(${node.level}级)`;
+    var displayName = node.item ? node.item.name : `${node.material}(${node.level}级)`;
     if (node.item && node.material && node.level > 0 && !node.exactName) {
-        const alt = getAlternativeNames(node.material, node.level, node.item.name);
+        var alt = getAlternativeNames(node.material, node.level, node.item.name);
         if (alt) {
             displayName += ` ${alt}`;
         }
     }
     
-    const tree = {
+    var tree = {
         name: displayName,
         material: node.material,
         level: node.level,
@@ -1103,10 +1342,10 @@ function buildOutputTree(node, representatives, enabledSources) {
         tree.children = [];
         node.crafted_from.ingredients.forEach(ing => {
             // Find item properties for ingredient
-            const ingName = normalizeCraftItemName(ing.name);
-            const ingItem = db.find(x => x.name === ingName);
+            var ingName = normalizeCraftItemName(ing.name);
+            var ingItem = getDB().find(x => x.name === ingName);
             if (ingItem) {
-                const repNode = {
+                var repNode = {
                     item: ingItem,
                     material: ingItem.material,
                     level: ingItem.level,
@@ -1117,7 +1356,7 @@ function buildOutputTree(node, representatives, enabledSources) {
                     exactName: true
                 };
                 
-                const subTree = buildOutputTree(repNode, representatives, enabledSources);
+                var subTree = buildOutputTree(repNode, representatives, enabledSources);
                 subTree.count = ing.count;
                 tree.children.push(subTree);
             } else {
@@ -1158,10 +1397,10 @@ function getSuccessRate(book, jump, recipe = null) {
     if (recipe && recipe.node1 && recipe.node2) {
         return getRecipeTargetSuccessRate(recipe);
     }
-    
-    const selectEl = document.getElementById("alchemy-rank-select");
-    const rank = selectEl ? selectEl.value : "advanced";
-    let synthRate = 100;
+
+    // 小程序环境无 DOM，默认高阶炼金
+    var rank = (typeof getAlchemyRank === 'function') ? getAlchemyRank() : "advanced";
+    var synthRate = 100;
     
     if (rank === "intermediate") {
         if (jump <= -1) {
@@ -1210,68 +1449,70 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
     if (targetItem && !isEquipmentCandidate(targetItem)) {
         maxBook = 0;
     }
-    const recipeGroups = new Map();
-    const L = targetItem.level;
-    const M = targetItem.material;
+    var recipeGroups = new Map();
+    var L = targetItem.level;
+    var M = targetItem.material;
     
     // If the target item's material is blacklisted, return no recipes
-    if (!enabledMaterials.has(M)) return [];
+    // Only skip equipment materials that are explicitly disabled
+    if (ALL_EQUIPMENT_MATERIALS.indexOf(M) !== -1 && !enabledMaterials.has(M)) return [];
     
-    const targetMaterialSlots = getItemMaterialSlots(targetItem);
+    var targetMaterialSlots = getItemMaterialSlots(targetItem);
     if (targetMaterialSlots.length > 3) return [];
     
-    const sub2_m = targetItem.sub_material2 ? targetItem.sub_material2.trim() : "";
-    const is3Mat = targetMaterialSlots.length === 3;
+    var sub2_m = targetItem.sub_material2 ? targetItem.sub_material2.trim() : "";
+    var is3Mat = targetMaterialSlots.length === 3;
     
-    for (let B = 0; B <= maxBook; B++) {
-        for (let J = 0; J <= maxJump; J++) {
-            const L_min = L - B - J;
+    for (var B = 0; B <= maxBook; B++) {
+        for (var J = 0; J <= maxJump; J++) {
+            var L_min = L - B - J;
             if (L_min < 1) continue;
             
             if (is3Mat) {
                 // 3-material logic
-                const m2 = targetItem.sub_material1 ? targetItem.sub_material1.trim() : M;
-                const m3 = sub2_m;
+                var m2 = targetItem.sub_material1 ? targetItem.sub_material1.trim() : M;
+                var m3 = sub2_m;
                 
-                // Skip if sub-materials are blacklisted
-                if (!enabledMaterials.has(m2) || !enabledMaterials.has(m3)) continue;
+                // Skip if sub-materials are blacklisted equipment materials
+                if ((ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2))
+                    || (ALL_EQUIPMENT_MATERIALS.indexOf(m3) !== -1 && !enabledMaterials.has(m3))) continue;
                 
-                const minL = L_min;
-                for (let L1 = minL; L1 <= minL + 2; L1++) {
+                var minL = L_min;
+                for (var L1 = minL; L1 <= minL + 2; L1++) {
                     if (L1 >= L) continue;
-                    const key_slot1 = `${M}_${L1}`;
-                    const node_slot1 = dp[key_slot1];
+                    var key_slot1 = `${M}_${L1}`;
+                    var node_slot1 = dp[key_slot1];
                     if (!node_slot1 || node_slot1.cost === Infinity) continue;
                     
-                    for (let L2 = minL; L2 <= minL + 2; L2++) {
+                    for (var L2 = minL; L2 <= minL + 2; L2++) {
                         if (L2 >= L) continue;
                         if (L1 < L2) continue; // Prevent primary attribute shift (吃属)
-                        const key_slot2 = `${m2}_${L2}`;
-                        const node_slot2 = dp[key_slot2];
+                        var key_slot2 = `${m2}_${L2}`;
+                        var node_slot2 = dp[key_slot2];
                         if (!node_slot2 || node_slot2.cost === Infinity) continue;
                         
-                        for (let L3 = minL; L3 <= minL + 2; L3++) {
+                        for (var L3 = minL; L3 <= minL + 2; L3++) {
                             if (L3 >= L) continue;
                             if (L1 < L3) continue; // Prevent primary attribute shift (吃属)
                             if (Math.min(L1, L2, L3) !== minL) continue;
                             
-                            const key_slot3 = `${m3}_${L3}`;
-                            const node_slot3 = dp[key_slot3];
+                            var key_slot3 = `${m3}_${L3}`;
+                            var node_slot3 = dp[key_slot3];
                             if (!node_slot3 || node_slot3.cost === Infinity) continue;
                             
-                            const cost = node_slot1.cost + node_slot2.cost + node_slot3.cost + BOOK_COSTS[B] + getJumpPenalty(J);
-                            const name1 = node_slot1.item ? node_slot1.item.name : `${M}(物等${L1})`;
-                            const name2 = node_slot2.item ? node_slot2.item.name : `${m2}(物等${L2})`;
-                            const name3 = node_slot3.item ? node_slot3.item.name : `${m3}(物等${L3})`;
+                            var cost = node_slot1.cost + node_slot2.cost + node_slot3.cost + BOOK_COSTS[B] + getJumpPenalty(J);
+                            var name1 = node_slot1.item ? node_slot1.item.name : `${M}(物等${L1})`;
+                            var name2 = node_slot2.item ? node_slot2.item.name : `${m2}(物等${L2})`;
+                            var name3 = node_slot3.item ? node_slot3.item.name : `${m3}(物等${L3})`;
                             
-                            const displayName1 = name1 + getAlternativeNames(M, L1, name1);
-                            const displayName2 = name2 + getAlternativeNames(m2, L2, name2);
-                            const displayName3 = name3 + getAlternativeNames(m3, L3, name3);
-                            const certainty = getRecipeCertainty(node_slot1.item, node_slot2.item, B, targetItem);
+                            var displayName1 = name1 + getAlternativeNames(M, L1, name1);
+                            var displayName2 = name2 + getAlternativeNames(m2, L2, name2);
+                            var displayName3 = name3 + getAlternativeNames(m3, L3, name3);
+                            var certainty = getRecipeCertainty(node_slot1.item, node_slot2.item, B, targetItem);
                             if (certainty.rate <= 0) continue;
                             
-                            const groupKey = `${name1}_1_${name2}_1_${name3}`;
-                            const existing = recipeGroups.get(groupKey);
+                            var groupKey = `${name1}_1_${name2}_1_${name3}`;
+                            var existing = recipeGroups.get(groupKey);
                             if (isBetterRecipe(existing, cost, certainty.rate, B)) {
                                 recipeGroups.set(groupKey, {
                                     is3Material: true,
@@ -1297,39 +1538,39 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
                 }
             } else {
                 // 2-material logic
-                let m2List = COMPATIBILITY[M] || [M];
+                var m2List = COMPATIBILITY[M] || [M];
                 if (targetItem.sub_material1) {
-                    const sub_m = targetItem.sub_material1.trim();
+                    var sub_m = targetItem.sub_material1.trim();
                     if (sub_m) {
                         m2List = [sub_m];
                     }
                 }
                 
-                const minL = L_min;
+                var minL = L_min;
                 
                 // Case 0: Advanced alchemy range model.
                 // Example: level 21 + level 21 has base range 14-25; book 2 extends it to 14-27.
                 if (J === 0) {
-                    for (let L1 = 1; L1 < L; L1++) {
-                        const key_slot1_adv = `${M}_${L1}`;
-                        const node_slot1_adv = dp[key_slot1_adv];
+                    for (var L1 = 1; L1 < L; L1++) {
+                        var key_slot1_adv = `${M}_${L1}`;
+                        var node_slot1_adv = dp[key_slot1_adv];
                         if (!node_slot1_adv || node_slot1_adv.cost === Infinity || !node_slot1_adv.item) continue;
                         
                         m2List.forEach(m2 => {
-                            if (!enabledMaterials.has(m2)) return;
-                            for (let L2 = 1; L2 <= L1; L2++) {
-                                const key_slot2_adv = `${m2}_${L2}`;
-                                const node_slot2_adv = dp[key_slot2_adv];
+                            if (ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2)) return;
+                            for (var L2 = 1; L2 <= L1; L2++) {
+                                var key_slot2_adv = `${m2}_${L2}`;
+                                var node_slot2_adv = dp[key_slot2_adv];
                                 if (!node_slot2_adv || node_slot2_adv.cost === Infinity || !node_slot2_adv.item) continue;
                                 
-                                const certainty = getRecipeCertainty(node_slot1_adv.item, node_slot2_adv.item, B, targetItem);
+                                var certainty = getRecipeCertainty(node_slot1_adv.item, node_slot2_adv.item, B, targetItem);
                                 if (certainty.rate <= 0) continue;
                                 
-                                const simp = simplifyRecipeSlot2(node_slot1_adv, node_slot2_adv, B, targetItem);
-                                const cost = node_slot1_adv.cost + simp.cost2 + BOOK_COSTS[B];
-                                const name1 = node_slot1_adv.item.name;
-                                const groupKey = `${name1}_1_${simp.name2}`;
-                                const existing = recipeGroups.get(groupKey);
+                                var simp = simplifyRecipeSlot2(node_slot1_adv, node_slot2_adv, B, targetItem);
+                                var cost = node_slot1_adv.cost + simp.cost2 + BOOK_COSTS[B];
+                                var name1 = node_slot1_adv.item.name;
+                                var groupKey = `${name1}_1_${simp.name2}`;
+                                var existing = recipeGroups.get(groupKey);
                                 
                                 if (isBetterRecipe(existing, cost, certainty.rate, B)) {
                                     recipeGroups.set(groupKey, {
@@ -1353,32 +1594,32 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
                 }
                 
                 // Case 1: Standard (L1 >= minL, L2 >= minL, min(L1, L2) = minL)
-                for (let L1 = minL; L1 <= minL + 2; L1++) {
+                for (var L1 = minL; L1 <= minL + 2; L1++) {
                     if (L1 >= L) continue;
-                    const key_slot1_std = `${M}_${L1}`;
-                    const node_slot1_std = dp[key_slot1_std];
+                    var key_slot1_std = `${M}_${L1}`;
+                    var node_slot1_std = dp[key_slot1_std];
                     if (!node_slot1_std || node_slot1_std.cost === Infinity) continue;
                     
                     m2List.forEach(m2 => {
-                        if (!enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
-                        for (let L2 = minL; L2 <= minL + 2; L2++) {
+                        if (ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
+                        for (var L2 = minL; L2 <= minL + 2; L2++) {
                             if (L2 >= L) continue;
                             if (L1 < L2) continue; // Prevent primary attribute shift (吃属)
                             if (Math.min(L1, L2) !== minL) continue;
                             
-                            const key_slot2 = `${m2}_${L2}`;
-                            const node_slot2 = dp[key_slot2];
+                            var key_slot2 = `${m2}_${L2}`;
+                            var node_slot2 = dp[key_slot2];
                             if (!node_slot2 || node_slot2.cost === Infinity) continue;
                             
-                            const certainty = getRecipeCertainty(node_slot1_std.item, node_slot2.item, B, targetItem);
+                            var certainty = getRecipeCertainty(node_slot1_std.item, node_slot2.item, B, targetItem);
                             if (certainty.rate <= 0) continue;
                             
-                            const simp = simplifyRecipeSlot2(node_slot1_std, node_slot2, B, targetItem);
-                            const cost = node_slot1_std.cost + simp.cost2 + BOOK_COSTS[B] + getJumpPenalty(J);
-                            const name1 = node_slot1_std.item ? node_slot1_std.item.name : `${M}(物等${L1})`;
+                            var simp = simplifyRecipeSlot2(node_slot1_std, node_slot2, B, targetItem);
+                            var cost = node_slot1_std.cost + simp.cost2 + BOOK_COSTS[B] + getJumpPenalty(J);
+                            var name1 = node_slot1_std.item ? node_slot1_std.item.name : `${M}(物等${L1})`;
                             
-                            const groupKey = `${name1}_1_${simp.name2}`;
-                            const existing = recipeGroups.get(groupKey);
+                            var groupKey = `${name1}_1_${simp.name2}`;
+                            var existing = recipeGroups.get(groupKey);
                             if (isBetterRecipe(existing, cost, certainty.rate, B)) {
                                 recipeGroups.set(groupKey, {
                                     name1: name1,
@@ -1400,26 +1641,26 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
                 }
                 
                 // Case 2: Double Slot 1 attribute-preservation recipe (L2 = L_min + 1, L1 = L_min)
-                const L1_dbl = L_min;
-                const L2_dbl = L_min + 1;
+                var L1_dbl = L_min;
+                var L2_dbl = L_min + 1;
                 if (L2_dbl < L) {
-                    const key_slot1_dbl = `${M}_${L1_dbl}`;
-                    const node_slot1_dbl = dp[key_slot1_dbl];
+                    var key_slot1_dbl = `${M}_${L1_dbl}`;
+                    var node_slot1_dbl = dp[key_slot1_dbl];
                     if (node_slot1_dbl && node_slot1_dbl.cost !== Infinity) {
                         m2List.forEach(m2 => {
-                            if (!enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
-                            const key_slot2 = `${m2}_${L2_dbl}`;
-                            const node_slot2 = dp[key_slot2];
+                            if (ALL_EQUIPMENT_MATERIALS.indexOf(m2) !== -1 && !enabledMaterials.has(m2)) return; // Skip if secondary material is disabled
+                            var key_slot2 = `${m2}_${L2_dbl}`;
+                            var node_slot2 = dp[key_slot2];
                             if (node_slot2 && node_slot2.cost !== Infinity) {
-                                const certainty = getRecipeCertainty(node_slot1_dbl.item, node_slot2.item, B, targetItem);
+                                var certainty = getRecipeCertainty(node_slot1_dbl.item, node_slot2.item, B, targetItem);
                                 if (certainty.rate <= 0) return;
                                 
-                                const simp = simplifyRecipeSlot2(node_slot1_dbl, node_slot2, B, targetItem);
-                                const cost = node_slot1_dbl.cost * 2 + simp.cost2 + BOOK_COSTS[B] + getJumpPenalty(J);
-                                const name1 = node_slot1_dbl.item ? node_slot1_dbl.item.name : `${M}(物等${L1_dbl})`;
+                                var simp = simplifyRecipeSlot2(node_slot1_dbl, node_slot2, B, targetItem);
+                                var cost = node_slot1_dbl.cost * 2 + simp.cost2 + BOOK_COSTS[B] + getJumpPenalty(J);
+                                var name1 = node_slot1_dbl.item ? node_slot1_dbl.item.name : `${M}(物等${L1_dbl})`;
                                 
-                                const groupKey = `${name1}_2_${simp.name2}`;
-                                const existing = recipeGroups.get(groupKey);
+                                var groupKey = `${name1}_2_${simp.name2}`;
+                                var existing = recipeGroups.get(groupKey);
                                 if (isBetterRecipe(existing, cost, certainty.rate, B)) {
                                     recipeGroups.set(groupKey, {
                                         name1: name1,
@@ -1446,24 +1687,24 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
     
 
     // Add level-down alternative recipe suggestions
-    const sourceNames = LEVEL_DOWN_SOURCE_NAMES[M] || [];
+    var sourceNames = LEVEL_DOWN_SOURCE_NAMES[M] || [];
     sourceNames.forEach(name => {
-        const item = db.find(x => x.name === name);
+        var item = getDB().find(x => x.name === name);
         if (item && item.level > L) {
             // Level-down compounding does not use books (B = 0)
-            const B = 0;
-            const X = getAlchemyBaseBonus() - 1;
-            const L_sub_val = Math.max(1, L - X);
+            var B = 0;
+            var X = getAlchemyBaseBonus() - 1;
+            var L_sub_val = Math.max(1, L - X);
             if (L_sub_val <= L - 2) {
-                const primaryKey = `${M}_${item.level}`;
-                const primaryNode = dp[primaryKey];
+                var primaryKey = `${M}_${item.level}`;
+                var primaryNode = dp[primaryKey];
                 if (primaryNode && primaryNode.cost !== Infinity) {
-                    const junkCost = Math.max(10, L_sub_val * 5);
-                    const cost = primaryNode.cost + junkCost + BOOK_COSTS[B];
-                    const groupKey = `${item.name}_1_${L_sub_val}等属性杂物`;
+                    var junkCost = Math.max(10, L_sub_val * 5);
+                    var cost = primaryNode.cost + junkCost + BOOK_COSTS[B];
+                    var groupKey = `${item.name}_1_${L_sub_val}等属性杂物`;
                     
-                    const junkItem = { name: `${L_sub_val}等属性杂物`, level: L_sub_val, material: "任意" };
-                    const certainty = getRecipeCertainty(item, junkItem, B, targetItem);
+                    var junkItem = { name: `${L_sub_val}等属性杂物`, level: L_sub_val, material: "任意" };
+                    var certainty = getRecipeCertainty(item, junkItem, B, targetItem);
                     
                     recipeGroups.set(groupKey, {
                         name1: item.name,
@@ -1491,22 +1732,22 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
     });
 
     // Add level-up alternative recipe suggestions
-    const levelUpSrcs = LEVEL_UP_SOURCE_NAMES[M] || [];
+    var levelUpSrcs = LEVEL_UP_SOURCE_NAMES[M] || [];
     levelUpSrcs.forEach(src => {
         if (src.level < L) {
-            const S_key = `${M}_${src.level}`;
-            const node_S = dp[S_key];
+            var S_key = `${M}_${src.level}`;
+            var node_S = dp[S_key];
             if (node_S && node_S.cost !== Infinity) {
-                const baseBonus = getAlchemyBaseBonus();
-                const B = 0;
-                const maxReachable = src.level + baseBonus - 1;
+                var baseBonus = getAlchemyBaseBonus();
+                var B = 0;
+                var maxReachable = src.level + baseBonus - 1;
                 if (maxReachable >= L) {
-                    const junkLevel = src.level;
-                    const junkCost = Math.max(10, junkLevel * 5);
-                    const cost = node_S.cost + junkCost + BOOK_COSTS[B];
-                    const groupKey = `${src.name}_1_${junkLevel}等属性杂物`;
-                    const junkItem = { name: `${junkLevel}等属性杂物`, level: junkLevel, material: "任意" };
-                    const certainty = getRecipeCertainty({ name: src.name, level: src.level, material: M }, junkItem, B, targetItem);
+                    var junkLevel = src.level;
+                    var junkCost = Math.max(10, junkLevel * 5);
+                    var cost = node_S.cost + junkCost + BOOK_COSTS[B];
+                    var groupKey = `${src.name}_1_${junkLevel}等属性杂物`;
+                    var junkItem = { name: `${junkLevel}等属性杂物`, level: junkLevel, material: "任意" };
+                    var certainty = getRecipeCertainty({ name: src.name, level: src.level, material: M }, junkItem, B, targetItem);
                     recipeGroups.set(groupKey, {
                         name1: src.name,
                         name2: `${junkLevel}等属性杂物`,
@@ -1533,7 +1774,7 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
     });
 
     // Sort alternative recipes by cost
-    const recipes = Array.from(recipeGroups.values());
+    var recipes = Array.from(recipeGroups.values());
     recipes.sort((a, b) => a.cost - b.cost);
 
     // For prop (non-equipment) targets, generate a simplified NPC shop recommendation
@@ -1554,7 +1795,7 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
         var shopRecipes = recipes.filter(function(r) {
             var isLevelPath = r.desc.indexOf("降等合成") !== -1 || r.desc.indexOf("升等合成") !== -1;
             if (!isLevelPath) return false;
-            var primaryItem = db.find(function(x) { return x.name === r.name1; });
+            var primaryItem = getDB().find(function(x) { return x.name === r.name1; });
             if (!primaryItem) return false;
             var sd = primaryItem.source_display || "";
             return sd.indexOf("购买") !== -1 && sd.indexOf("8-12便利店") === -1;
@@ -1562,7 +1803,7 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
         if (shopRecipes.length > 0) {
             // Reformat all shop recipes with clean NPC description
             shopRecipes.forEach(function(r) {
-                var primaryItem = db.find(function(x) { return x.name === r.name1; });
+                var primaryItem = getDB().find(function(x) { return x.name === r.name1; });
                 var shopLoc = extractShopLoc(primaryItem);
                 var isUp = r.desc.indexOf("升等合成") !== -1;
                 var tag = isUp ? "升等" : "降等";
@@ -1583,35 +1824,39 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
 
 // Merged from app.js (production, incl. level-up/down)
 function queryEquipmentItems(filters = {}) {
-    const query = String(filters.query || "").trim().toLowerCase();
-    const category = String(filters.category || "").trim();
-    const primaryMaterial = String(filters.primaryMaterial || "").trim();
-    const attributeMode = String(filters.attributeMode || "").trim();
-    const showNoStats = filters.showNoStats !== undefined ? Boolean(filters.showNoStats) : true;
-    const showEquip = filters.showEquip !== undefined ? Boolean(filters.showEquip) : true;
-    const showProps = filters.showProps !== undefined ? Boolean(filters.showProps) : false;
-    const showCraft = filters.showCraft !== undefined ? Boolean(filters.showCraft) : false;
-    const showMall = filters.showMall !== undefined ? Boolean(filters.showMall) : false;
+    var query = String(filters.query || "").trim().toLowerCase();
+    var category = String(filters.category || "").trim();
+    var primaryMaterial = String(filters.primaryMaterial || "").trim();
+    var attributeMode = String(filters.attributeMode || "").trim();
+    var showNoStats = filters.showNoStats !== undefined ? Boolean(filters.showNoStats) : true;
+    var showEquip = filters.showEquip !== undefined ? Boolean(filters.showEquip) : true;
+    var showProps = filters.showProps !== undefined ? Boolean(filters.showProps) : false;
+    var showCraft = filters.showCraft !== undefined ? Boolean(filters.showCraft) : false;
+    var showMall = filters.showMall !== undefined ? Boolean(filters.showMall) : false;
     
-    return db
+    return getDB()
         .filter(item => {
-            const isEquip = isEquipmentCandidate(item);
-            const isProp = item && !isEquip && item.material && item.level > 0;
+            var isEquip = isEquipmentCandidate(item) && EQUIPMENT_TYPES.has(item.type);
+            var isProp = item && !isEquip && item.material && item.level > 0
+                && !EQUIPMENT_TYPES.has(item.type);
             // Craft items (e.g. fridge, tools) may have no material/req_level but should be searchable
-            const hasCraft = item && item.crafted_from && item.crafted_from.tool;
+            var hasCraft = item && item.crafted_from && item.crafted_from.tool;
 
-            let keep = false;
+            // Mall/special equipment: req_level=0, has stats, not craftable
+            var isMall = item && item.req_level === 0 && item.stats && !hasCraft && item.type;
+
+            var keep = false;
             if (showEquip && isEquip) keep = true;
             if (showProps && isProp) keep = true;
             if (showCraft && hasCraft) keep = true;
-            if (showMall && item.obtain_method === "mall") keep = true;
+            if (showMall && isMall) keep = true;
             if (!keep) return false;
 
-            // When mall filter is off, hide mall-exclusive equipment from normal equipment list
-            if (!showMall && item.obtain_method === "mall") return false;
+            // When mall filter is off, hide mall-exclusive equipment from normal lists
+            if (!showMall && isMall) return false;
             
-            const stats = String(item.stats || "").trim();
-            const hasNoStats = !stats || stats === "无" || stats === "无属性";
+            var stats = String(item.stats || "").trim();
+            var hasNoStats = !stats || stats === "无" || stats === "无属性";
             if (!showNoStats && hasNoStats && !isProp && item.material !== "星耀" && !hasCraft) return false;
             
             if (query) {
@@ -1646,22 +1891,22 @@ function queryEquipmentItems(filters = {}) {
             
             if (attributeMode) {
                 if (attributeMode === "single") {
-                    const slotCount = getItemMaterialSlots(item).length;
+                    var slotCount = getItemMaterialSlots(item).length;
                     if (slotCount !== 1) return false;
                 } else if (attributeMode === "multi") {
-                    const slotCount = getItemMaterialSlots(item).length;
+                    var slotCount = getItemMaterialSlots(item).length;
                     if (slotCount <= 1) return false;
                 } else {
-                    const parts = stats.split(/\s+/).filter(Boolean);
-                    const positiveAttrs = [];
-                    let hasNegSpd = false;
+                    var parts = stats.split(/\s+/).filter(Boolean);
+                    var positiveAttrs = [];
+                    var hasNegSpd = false;
                     
                     parts.forEach(part => {
-                        const match = part.match(/^([a-zA-Z\u4e00-\u9fa5]+)([-+]\d+)/);
+                        var match = part.match(/^([a-zA-Z\u4e00-\u9fa5]+)([-+]\d+)/);
                         if (match) {
-                            const attrName = match[1].toUpperCase();
-                            const valStr = match[2];
-                            const isNegative = valStr.startsWith("-");
+                            var attrName = match[1].toUpperCase();
+                            var valStr = match[2];
+                            var isNegative = valStr.startsWith("-");
                             
                             if (attrName === "SPD" && isNegative) {
                                 hasNegSpd = true;
@@ -1696,7 +1941,7 @@ function queryEquipmentItems(filters = {}) {
 }
 
 // Material abbreviation mapping for search (22 entries)
-var MATERIAL_ABBREVIATIONS = (window.alchemy_config && window.alchemy_config.MATERIAL_ABBREVIATIONS) || {
+var MATERIAL_ABBREVIATIONS = (alchemy_config && alchemy_config.MATERIAL_ABBREVIATIONS) || {
     "木":"木材","皮":"兽皮","骨":"兽骨","毛":"兽毛","羽":"羽毛",
     "壳":"甲壳","赤":"赤铁","魔":"魔性物质","白":"白银","钻":"钻石",
     "宝":"宝石","水":"水晶","黏":"白色黏土","泥":"普通黏土",
@@ -1710,3 +1955,100 @@ function resolveMaterialAbbreviation(input) {
     if (ALL_EQUIPMENT_MATERIALS && ALL_EQUIPMENT_MATERIALS.includes(input)) return input;
     return null;
 }
+
+
+// ========== Mini Program 导出 ==========
+var alchemy_core = {
+  setDB: setDB,
+  getDB: getDB,
+  getBookSourceText: getBookSourceText,
+  formatBookUsage: formatBookUsage,
+  getItemMaterialSlots: getItemMaterialSlots,
+  getItemSubMaterials: getItemSubMaterials,
+  getItemSearchAliases: getItemSearchAliases,
+  hasDisabledMaterialSlot: hasDisabledMaterialSlot,
+  isSelfProvidedUnknownSourceItem: isSelfProvidedUnknownSourceItem,
+  getBookLevelFromName: getBookLevelFromName,
+  normalizeCraftItemName: normalizeCraftItemName,
+  getAdvancedAlchemyLevelRange: getAdvancedAlchemyLevelRange,
+  isEquipmentCandidate: isEquipmentCandidate,
+  getAlchemyResultCandidates: getAlchemyResultCandidates,
+  getRecipeCertainty: getRecipeCertainty,
+  isTargetInAdvancedAlchemyRange: isTargetInAdvancedAlchemyRange,
+  isBetterRecipe: isBetterRecipe,
+  isBetterPathNode: isBetterPathNode,
+  parseRecommendedFormula: parseRecommendedFormula,
+  buildItemDataMaterialReferenceTree: buildItemDataMaterialReferenceTree,
+  buildReferenceTree: buildReferenceTree,
+  buildNonSynthSourceTree: buildNonSynthSourceTree,
+  getRecipeTargetSuccessRate: getRecipeTargetSuccessRate,
+  getDeltaProb: getDeltaProb,
+  buildLevelToCandidatesMapping: buildLevelToCandidatesMapping,
+  getRecipeOutcomeBreakdown: getRecipeOutcomeBreakdown,
+  getAlternativeNames: getAlternativeNames,
+  getAlchemyResultCandidatesMulti: getAlchemyResultCandidatesMulti,
+  getRecipeOutcomeBreakdownMulti: getRecipeOutcomeBreakdownMulti,
+  solveAlchemyPath: solveAlchemyPath,
+  getRepresentatives: getRepresentatives,
+  buildOutputTree: buildOutputTree,
+  getSuccessRate: getSuccessRate,
+  getAlternativeRecipes: getAlternativeRecipes,
+  queryEquipmentItems: queryEquipmentItems,
+  resolveMaterialAbbreviation: resolveMaterialAbbreviation,
+};
+
+    // === 统一导出 ===
+    var _exports = {
+        setDB: setDB,
+        getDB: getDB
+    };
+
+    // 导出所有公共函数和常量
+    var _exportNames = [
+        'ALL_EQUIPMENT_MATERIALS', 'COMPATIBILITY', 'BOOK_COSTS', 'BOOK_SOURCES',
+        'JUMP_PENALTIES', 'ADVANCED_ALCHEMY_BASE_BONUS', 'CRAFT_NAME_ALIASES',
+        'LEVEL_DOWN_SOURCE_NAMES', 'LEVEL_UP_SOURCE_NAMES', 'MATERIAL_ABBREVIATIONS',
+        'EQUIPMENT_TYPES', 'NON_ALCHEMY_METHODS', 'NO_OBTAIN_PATH_METHODS',
+        'UNIVERSAL_SAFE_JUNK',
+        'getBookSourceText', 'formatBookUsage', 'getItemMaterialSlots',
+        'getItemSubMaterials', 'getItemSearchAliases', 'hasDisabledMaterialSlot',
+        'isSelfProvidedUnknownSourceItem', 'getBookLevelFromName',
+        'normalizeCraftItemName', 'getAdvancedAlchemyLevelRange',
+        'isEquipmentCandidate', 'getAlchemyResultCandidates', 'getRecipeCertainty',
+        'isTargetInAdvancedAlchemyRange', 'isBetterRecipe', 'isBetterPathNode',
+        'parseRecommendedFormula', 'buildItemDataMaterialReferenceTree',
+        'buildReferenceTree', 'buildNonSynthSourceTree',
+        'getRecipeTargetSuccessRate', 'getDeltaProb',
+        'buildLevelToCandidatesMapping', 'getRecipeOutcomeBreakdown',
+        'getAlternativeNames', 'getAlchemyResultCandidatesMulti',
+        'getRecipeOutcomeBreakdownMulti', 'solveAlchemyPath', 'getRepresentatives',
+        'buildOutputTree', 'getSuccessRate', 'getAlternativeRecipes',
+        'queryEquipmentItems', 'resolveMaterialAbbreviation',
+        'getSingleAttribute', 'getSafeJunkMaterials', 'getSafeJunkDescription',
+        'simplifyRecipeSlot2', 'getRecipeDesc', 'isStrictlyCraftOnly',
+        'getAlchemyBaseBonus', 'getJumpPenalty'
+    ];
+
+    for (var i = 0; i < _exportNames.length; i++) {
+        var name = _exportNames[i];
+        try {
+            var val = eval(name);
+            if (typeof val !== 'undefined') {
+                _exports[name] = val;
+            }
+        } catch(e) {
+            // 变量未定义，跳过
+        }
+    }
+
+    // 浏览器模式: 挂到 window
+    if (typeof window !== 'undefined') {
+        for (var key in _exports) {
+            if (_exports.hasOwnProperty(key)) {
+                window[key] = _exports[key];
+            }
+        }
+    }
+
+    return _exports;
+});
