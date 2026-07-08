@@ -25,6 +25,29 @@
     return null;
     }
 
+    // === 显示装备ID集合 (BookCollect + 器具制作 + 副本掉落) ===
+    var _displayEquipmentIds = null;
+    function setDisplayEquipmentIds(ids) {
+        if (Array.isArray(ids)) {
+            _displayEquipmentIds = new Set(ids);
+        } else if (ids instanceof Set) {
+            _displayEquipmentIds = ids;
+        }
+    }
+    function getDisplayEquipmentIds() {
+        if (_displayEquipmentIds) return _displayEquipmentIds;
+        if (typeof window !== 'undefined' && window._displayEquipmentIds) {
+            _displayEquipmentIds = window._displayEquipmentIds;
+            return _displayEquipmentIds;
+        }
+        return null;
+    }
+    function isDisplayEquipment(item) {
+        if (!item || !item.id) return false;
+        var ids = getDisplayEquipmentIds();
+        return ids ? ids.has(item.id) : false;
+    }
+
     // === 环境适配: 配置 ===
     var alchemy_config = typeof window !== 'undefined' && window.alchemy_config
         ? window.alchemy_config
@@ -142,26 +165,82 @@ function buildNonSynthSourceTree(targetItem) {
 }
 
 // 配方描述生成
-function getRecipeDesc(name1, L1, count1, name2, L2, count2, book, J, isLevelDown, targetItem, isLevelUp) {
-    var isProp = targetItem && !isEquipmentCandidate(targetItem);
-    var alt1 = getAlternativeNames(targetItem ? targetItem.material : null, L1, name1) || '';
-    var alt2 = getAlternativeNames(targetItem ? targetItem.material : null, L2, name2) || '';
-    var displayName1 = name1 + alt1;
-    var displayName2 = name2 + alt2;
-    var countText1 = count1 > 1 ? ' x' + count1 : '';
-    var countText2 = count2 > 1 ? ' x' + count2 : '';
+function getCandidatesCount(material, level) {
+    if (!material || !level) return { count: 0, item: null };
+    var count = 0;
+    var lastItem = null;
+    getDB().forEach(function(item) {
+        if (item.material === material && item.level === level) {
+            count++;
+            lastItem = item;
+        }
+    });
+    return { count: count, item: lastItem };
+}
 
-    if (isProp) {
-        if (isLevelUp) return '主材: ' + name1 + ' [物等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [物等' + L2 + ']' + countText2 + ' (升等合成)';
-        if (isLevelDown) return '主材: ' + name1 + ' [物等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [物等' + L2 + ']' + countText2 + ' (降等合成)';
-        return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + (J > 0 ? ' 且额外跳' + J + '级' : '');
+function getShortIngredientText(name, level, count, defaultMaterial) {
+    if (!name) return "";
+    var mat = "";
+    var isClickable = false;
+    var exactName = name;
+    
+    if (name.indexOf("等属性杂物") !== -1) {
+        var m = name.match(/(\d+)等属性杂物/);
+        mat = (m ? m[1] : level) + "等杂物";
     } else {
-        var bookText = book > 0 ? ' + 使用百科' + book + ' (+' + book + '级)' : ' + 不使用百科';
-        if (isLevelUp) return '主材: ' + name1 + ' [等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [等' + L2 + ']' + countText2 + ' + 无百科书 (升等合成)';
-        if (isLevelDown) return '主材: ' + name1 + ' [等' + L1 + ']' + countText1 + ' + 辅料: ' + name2 + ' [等' + L2 + ']' + countText2 + ' + 无百科书 (降等合成)';
-        if (J === 0 && book === 0) return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + ' + 不使用百科 (高级炼金范围命中)';
-        return '主材: ' + displayName1 + ' [物等' + L1 + ']' + countText1 + ' + 副材: ' + displayName2 + ' [物等' + L2 + ']' + countText2 + bookText + (J > 0 ? ' 且额外跳' + J + '级' : ' (无额外跳级)');
+        var item = getDB().find(function(x) { return x.name === name; });
+        if (item) {
+            mat = (item.material || "未知材质");
+            isClickable = true;
+            exactName = item.name;
+        } else {
+            mat = defaultMaterial || name;
+        }
     }
+    
+    var displayText = "";
+    if (name.indexOf("等属性杂物") !== -1) {
+        displayText = mat;
+    } else {
+        displayText = level + mat;
+        if (mat) {
+            var candInfo = getCandidatesCount(mat, level);
+            if (candInfo.count === 1 && candInfo.item) {
+                displayText = level + mat + "(" + candInfo.item.name + ")";
+            }
+        }
+    }
+    
+    var countText = count > 1 ? count + "x" : "";
+    displayText = countText + displayText;
+    
+    if (isClickable) {
+        var queryText = level + mat;
+        return '<span class="recipe-ingredient-link" data-name="' + exactName + '" data-query="' + queryText + '" title="点击查看【' + exactName + '】的配方">' + displayText + '</span>';
+    } else {
+        return displayText;
+    }
+}
+
+function getRecipeDesc(name1, L1, count1, name2, L2, count2, book, J, isLevelDown, targetItem, isLevelUp, name3, L3, count3) {
+    var defaultMat = targetItem ? targetItem.material : "";
+    var txt1 = getShortIngredientText(name1, L1, count1, defaultMat);
+    var txt2 = getShortIngredientText(name2, L2, count2, "");
+    var txt3 = name3 ? getShortIngredientText(name3, L3, count3 || 1, "") : "";
+    
+    var recipeText = txt1 + " + " + txt2;
+    if (txt3) {
+        recipeText += " + " + txt3;
+    }
+    if (book > 0) {
+        recipeText += " + 书" + book;
+    }
+    if (isLevelDown) {
+        recipeText += " (降等)";
+    } else if (isLevelUp) {
+        recipeText += " (升等)";
+    }
+    return recipeText;
 }
 
 // 简化配方副材（判断是否可用杂物替代）
@@ -318,6 +397,7 @@ function getItemSubMaterials(item) {
 function getItemSearchAliases(item) {
     return [
         item && item.name,
+        item && item.name_sc,
         item && item.query_tool_name,
         item && item.legacy_name,
         item && item.pinyin,
@@ -555,6 +635,41 @@ function buildReferenceTree(targetItem) {
     };
 }
 
+var EMPIRICAL_RECIPE_ESTIMATES = [
+    {
+        primaryName: "魔玉石",
+        secondaryName: "垂直尾翼",
+        targetName: "晚宴礼服",
+        book: 2,
+        rate: 33,
+        confidence: "低",
+        label: "实测校准估算"
+    }
+];
+
+function getEmpiricalRecipeEstimate(recipe, targetItem = null) {
+    if (!recipe || !recipe.node1 || !recipe.node2) return null;
+    var primaryItem = recipe.node1.item || {};
+    var secondaryItem = recipe.node2.item || {};
+    var target = targetItem || recipe.targetItem || (typeof selectedItem !== "undefined" ? selectedItem : null);
+    var book = Number(recipe.book || 0);
+    var name1 = primaryItem.name || recipe.name1 || "";
+    var name2 = secondaryItem.name || recipe.name2 || "";
+    var targetName = target ? target.name : "";
+
+    for (var i = 0; i < EMPIRICAL_RECIPE_ESTIMATES.length; i++) {
+        var estimate = EMPIRICAL_RECIPE_ESTIMATES[i];
+        var directMatch = estimate.primaryName === name1 && estimate.secondaryName === name2;
+        var reverseMatch = estimate.primaryName === name2 && estimate.secondaryName === name1;
+        if ((directMatch || reverseMatch)
+            && estimate.targetName === targetName
+            && estimate.book === book) {
+            return estimate;
+        }
+    }
+    return null;
+}
+
 // Calculate single recipe exact probability of getting targetItem using fallback mapping
 function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     if (!recipe || !recipe.node1 || !recipe.node2) return 0;
@@ -565,6 +680,9 @@ function getRecipeTargetSuccessRate(recipe, targetItem = null) {
     var fallbackTarget = typeof selectedItem !== 'undefined' ? selectedItem : null;
     var target = targetItem || recipe.targetItem || fallbackTarget;
     if (!primaryItem || !secondaryItem || !target) return 0;
+
+    var empiricalEstimate = getEmpiricalRecipeEstimate(recipe, target);
+    if (empiricalEstimate) return empiricalEstimate.rate;
     
     var L_min = Math.min(primaryItem.level, secondaryItem.level);
     var B = book;
@@ -941,6 +1059,9 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
     
     // Helper to get base/obtaining cost of a specific item
     var getBaseCost = (item) => {
+        if (enabledSources && enabledSources.customBases && enabledSources.customBases[item.name]) {
+            return 1;
+        }
         // If source is empty, try source_display and recommended_formula as fallback
         var effectiveSource = item.source || item.source_display || item.recommended_formula || "";
         if (!effectiveSource) {
@@ -1002,7 +1123,7 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
             cost: minCost,
             method: method,
             item: rep,
-            source: rep ? rep.source : ""
+            source: rep ? ((enabledSources && enabledSources.customBases && enabledSources.customBases[rep.name]) ? "自定义基础材料" : rep.source) : ""
         };
     });
     
@@ -1336,6 +1457,7 @@ function solveAlchemyPath(targetItem, maxBook, maxJump, enabledSources, returnAl
 function getRepresentatives(enabledSources) {
     var reps = {};
     var sources = enabledSources || { convenience: true, shop: true, mine: true, drop: true, craft: true };
+    var enablePropRec = (enabledSources && typeof enabledSources.propRec !== 'undefined') ? enabledSources.propRec : true;
     
     getDB().forEach(item => {
         if (!item.material || item.level <= 0) return;
@@ -1357,7 +1479,13 @@ function getRepresentatives(enabledSources) {
         if (!currentBest) {
             reps[key] = item;
         } else {
-            var hasSrc = (x) => (x.source && x.source.length > 0) || (x.source_display && x.source_display.length > 0) || (x.recommended_formula && x.recommended_formula.length > 0);
+            var hasSrc = (x) => {
+                var basicSrc = (x.source && x.source.length > 0) || (x.source_display && x.source_display.length > 0);
+                if (enablePropRec) {
+                    return basicSrc;
+                }
+                return basicSrc || (x.recommended_formula && x.recommended_formula.length > 0);
+            };
             var isNonAlchemy = (x) => x.crafted_from || hasSrc(x);
             var itemNonAlc = isNonAlchemy(item);
             var bestNonAlc = isNonAlchemy(currentBest);
@@ -1392,6 +1520,7 @@ function buildOutputTree(node, representatives, enabledSources) {
     
     var tree = {
         name: displayName,
+        cleanName: node.item ? node.item.name : node.material,
         material: node.material,
         level: node.level,
         cost: node.cost,
@@ -1408,14 +1537,16 @@ function buildOutputTree(node, representatives, enabledSources) {
             var ingName = normalizeCraftItemName(ing.name);
             var ingItem = getDB().find(x => x.name === ingName);
             if (ingItem) {
+                var isCustomBase = enabledSources && enabledSources.customBases && enabledSources.customBases[ingName];
+                var method = isCustomBase ? "base" : (ingItem.crafted_from ? "craft" : "base");
                 var repNode = {
                     item: ingItem,
                     material: ingItem.material,
                     level: ingItem.level,
                     cost: ingItem.level * 10, // dummy
-                    method: ingItem.crafted_from ? "craft" : "base",
-                    source: ingItem.source,
-                    crafted_from: ingItem.crafted_from,
+                    method: method,
+                    source: isCustomBase ? "自定义基础材料" : ingItem.source,
+                    crafted_from: isCustomBase ? null : ingItem.crafted_from,
                     exactName: true
                 };
                 
@@ -1506,10 +1637,11 @@ function getSuccessRate(book, jump, recipe = null) {
 
 // Merged from app.js (production, incl. level-up/down)
 function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp, representatives) {
-    if (targetItem && isStrictlyCraftOnly(targetItem)) {
+    var enablePropRec = (enabledSources && typeof enabledSources.propRec !== 'undefined') ? enabledSources.propRec : true;
+    if (!enablePropRec && targetItem && isStrictlyCraftOnly(targetItem)) {
         return [];
     }
-    if (targetItem && !isEquipmentCandidate(targetItem)) {
+    if (targetItem && (enablePropRec ? !isDisplayEquipment(targetItem) : !isEquipmentCandidate(targetItem))) {
         maxBook = 0;
     }
     var recipeGroups = new Map();
@@ -1593,7 +1725,7 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
                                     certaintyRate: certainty.rate,
                                     candidates: certainty.candidates,
                                     cost: cost,
-                                    desc: `主材: ${displayName1} [等${L1}] + 副1: ${displayName2} [等${L2}] + 副2: ${displayName3} [等${L3}] + ${formatBookUsage(B)}${J > 0 ? ' 且额外跳' + J + '级' : ' (无额外跳级)'}`
+                                    desc: getRecipeDesc(name1, L1, 1, name2, L2, 1, B, J, false, targetItem, false, name3, L3, 1)
                                 });
                             }
                         }
@@ -1841,7 +1973,7 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
     recipes.sort((a, b) => a.cost - b.cost);
 
     // For prop (non-equipment) targets, generate a simplified NPC shop recommendation
-    var isPropTarget = targetItem && !isEquipmentCandidate(targetItem) && targetItem.material;
+    var isPropTarget = targetItem && (enablePropRec ? !isDisplayEquipment(targetItem) : !isEquipmentCandidate(targetItem)) && targetItem.material;
     if (isPropTarget && recipes.length > 0) {
         // Helper: extract shop location from source_display
         function extractShopLoc(item) {
@@ -1864,20 +1996,39 @@ function getAlternativeRecipes(targetItem, maxBook, maxJump, enabledSources, dp,
             return sd.indexOf("购买") !== -1 && sd.indexOf("8-12便利店") === -1;
         });
         if (shopRecipes.length > 0) {
-            // Reformat all shop recipes with clean NPC description
-            shopRecipes.forEach(function(r) {
-                var primaryItem = getDB().find(function(x) { return x.name === r.name1; });
-                var shopLoc = extractShopLoc(primaryItem);
-                var isUp = r.desc.indexOf("升等合成") !== -1;
-                var tag = isUp ? "升等" : "降等";
-                var junkAdv = Math.max(1, L - 3);
-                var junkInt = Math.max(1, L - 2);
-                var junkRange = junkAdv === junkInt ? junkAdv + "等" : junkAdv + "~" + junkInt + "等";
-                var junkLabel = getSafeJunkDescription(M, 1).replace(/^\d+等/, "");
-                r.desc = shopLoc + "出售 " + r.name1 + " + " + junkRange + junkLabel + " (" + tag + ")";
-                r.isShopRecommendation = true;
-            });
-            return shopRecipes;
+            if (enablePropRec) {
+                // Return formatted shop recipes concatenated with original recipes
+                var formattedShopRecipes = shopRecipes.map(function(r) {
+                    var primaryItem = getDB().find(function(x) { return x.name === r.name1; });
+                    var shopLoc = extractShopLoc(primaryItem);
+                    var isUp = r.desc.indexOf("升等合成") !== -1;
+                    var tag = isUp ? "升等" : "降等";
+                    var junkAdv = Math.max(1, L - 3);
+                    var junkInt = Math.max(1, L - 2);
+                    var junkRange = junkAdv === junkInt ? junkAdv + "等" : junkAdv + "~" + junkInt + "等";
+                    var junkLabel = getSafeJunkDescription(M, 1).replace(/^\d+等/, "");
+                    var cloned = Object.assign({}, r);
+                    cloned.desc = shopLoc + "出售 " + r.name1 + " + " + junkRange + junkLabel + " (" + tag + ")";
+                    cloned.isShopRecommendation = true;
+                    return cloned;
+                });
+                return formattedShopRecipes.concat(recipes);
+            } else {
+                // Reformat all shop recipes in-place and return only shopRecipes (original behavior)
+                shopRecipes.forEach(function(r) {
+                    var primaryItem = getDB().find(function(x) { return x.name === r.name1; });
+                    var shopLoc = extractShopLoc(primaryItem);
+                    var isUp = r.desc.indexOf("升等合成") !== -1;
+                    var tag = isUp ? "升等" : "降等";
+                    var junkAdv = Math.max(1, L - 3);
+                    var junkInt = Math.max(1, L - 2);
+                    var junkRange = junkAdv === junkInt ? junkAdv + "等" : junkAdv + "~" + junkInt + "等";
+                    var junkLabel = getSafeJunkDescription(M, 1).replace(/^\d+等/, "");
+                    r.desc = shopLoc + "出售 " + r.name1 + " + " + junkRange + junkLabel + " (" + tag + ")";
+                    r.isShopRecommendation = true;
+                });
+                return shopRecipes;
+            }
         }
     }
 
@@ -1896,59 +2047,40 @@ function queryEquipmentItems(filters = {}) {
     var showProps = filters.showProps !== undefined ? Boolean(filters.showProps) : false;
     var showCraft = filters.showCraft !== undefined ? Boolean(filters.showCraft) : false;
     var showMall = filters.showMall !== undefined ? Boolean(filters.showMall) : false;
-    
-    // Helper to identify system dummy items, starting quest items, and pet-exclusive gear by ID range
-    var isSystemOrStartingOrExclusive = function(item) {
-        if (!item) return true;
-        // 0. General level 1 starting/quest equipment (white boots, leather shoes, Bastet's necklace, etc.)
-        if (item.level === 1 && item.req_level === 0) return true;
-        var idNum = parseInt(item.id, 10);
-        // 1. Character starting weapons (10001-10020)
-        if (idNum >= 10001 && idNum <= 10020) return true;
-        // 2. Pet starting equipment (10050-10099)
-        if (idNum >= 10050 && idNum <= 10099) return true;
-        // 3. System dummy stat items (10985-10999)
-        if (idNum >= 10985 && idNum <= 10999) return true;
-        // 4. Character starting clothes (21001-21020)
-        if (idNum >= 21001 && idNum <= 21020) return true;
-        // 5. Character starting headgear (22001-22010)
-        if (idNum >= 22001 && idNum <= 22010) return true;
-        // 6. Human pet exclusive armlets (25150-25165)
-        if (idNum >= 25150 && idNum <= 25165) return true;
-        // 7. Defensive Bow Evasion dummy (25926)
-        if (idNum === 25926) return true;
+
+    // Use BookCollect-based display equipment ID set (authoritative)
+    var isEquip = function(item) { return isDisplayEquipment(item); };
+
+    // Craft items that have a recipe tool (e.g. fridge, 器具制作)
+    var isCraftItem = function(item) { return item && item.crafted_from && item.crafted_from.tool; };
+
+    // Mall items: in the MALL_EQUIPMENT_IDS list or special alchemy_flag patterns
+    var MALL_EQUIPMENT_IDS = new Set(alchemy_config.MALL_EQUIPMENT_IDS || []);
+    var isMall = function(item) {
+        if (!item) return false;
+        if (MALL_EQUIPMENT_IDS.has(item.id)) return true;
+        if (item.req_level === 0 && (item.alchemy_flag === 11 || item.alchemy_flag === 15 || item.alchemy_flag === 31)
+            && item.stats && !isCraftItem(item) && EQUIPMENT_TYPES.has(item.type)) return true;
         return false;
     };
 
-    // Helper for system dummy items that should be hidden from all lists
-    var isSystemDummyItem = function(item) {
-        if (!item) return true;
-        var idNum = parseInt(item.id, 10);
-        return (idNum >= 10985 && idNum <= 10999) || idNum === 25926;
-    };
-
-    var MALL_EQUIPMENT_IDS = new Set(alchemy_config.MALL_EQUIPMENT_IDS || []);
-
     return getDB()
         .filter(item => {
-            var isEquip = item && item.type && item.category && ((item.alchemy_flag & 1) === 1) && EQUIPMENT_TYPES.has(item.type) && !isSystemDummyItem(item);
-            var isProp = item && !isEquip && item.material && item.level > 0
+            var equip = isEquip(item);
+            var isProp = item && !equip && item.material && item.level > 0
                 && !EQUIPMENT_TYPES.has(item.type);
-            // Craft items (e.g. fridge, tools) may have no material/req_level but should be searchable
-            var hasCraft = item && item.crafted_from && item.crafted_from.tool;
-
-            // Mall/special equipment: must be in the parsed mall/gacha IDs list or req_level === 0 fallback
-            var isMall = item && (MALL_EQUIPMENT_IDS.has(item.id) || (item.req_level === 0 && (item.alchemy_flag === 11 || item.alchemy_flag === 15 || item.alchemy_flag === 31) && item.stats && !hasCraft && EQUIPMENT_TYPES.has(item.type))) && !isSystemOrStartingOrExclusive(item);
+            var hasCraft = isCraftItem(item);
+            var mall = isMall(item);
 
             var keep = false;
-            if (showEquip && isEquip) keep = true;
+            if (showEquip && equip) keep = true;
             if (showProps && isProp) keep = true;
             if (showCraft && hasCraft) keep = true;
-            if (showMall && isMall) keep = true;
+            if (showMall && mall) keep = true;
             if (!keep) return false;
 
             // When mall filter is off, hide mall-exclusive equipment from normal lists
-            if (!showMall && isMall) return false;
+            if (!showMall && mall) return false;
             
             var stats = String(item.stats || "").trim();
             var hasNoStats = !stats || stats === "无" || stats === "无属性";
@@ -2056,6 +2188,9 @@ function resolveMaterialAbbreviation(input) {
 var alchemy_core = {
   setDB: setDB,
   getDB: getDB,
+  setDisplayEquipmentIds: setDisplayEquipmentIds,
+  getDisplayEquipmentIds: getDisplayEquipmentIds,
+  isDisplayEquipment: isDisplayEquipment,
   getBookSourceText: getBookSourceText,
   formatBookUsage: formatBookUsage,
   getItemMaterialSlots: getItemMaterialSlots,
@@ -2076,6 +2211,7 @@ var alchemy_core = {
   buildItemDataMaterialReferenceTree: buildItemDataMaterialReferenceTree,
   buildReferenceTree: buildReferenceTree,
   buildNonSynthSourceTree: buildNonSynthSourceTree,
+  getEmpiricalRecipeEstimate: getEmpiricalRecipeEstimate,
   getRecipeTargetSuccessRate: getRecipeTargetSuccessRate,
   getDeltaProb: getDeltaProb,
   buildLevelToCandidatesMapping: buildLevelToCandidatesMapping,
@@ -2095,7 +2231,10 @@ var alchemy_core = {
     // === 统一导出 ===
     var _exports = {
         setDB: setDB,
-        getDB: getDB
+        getDB: getDB,
+        setDisplayEquipmentIds: setDisplayEquipmentIds,
+        getDisplayEquipmentIds: getDisplayEquipmentIds,
+        isDisplayEquipment: isDisplayEquipment
     };
 
     // 导出所有公共函数和常量
@@ -2113,6 +2252,7 @@ var alchemy_core = {
         'isTargetInAdvancedAlchemyRange', 'isBetterRecipe', 'isBetterPathNode',
         'parseRecommendedFormula', 'buildItemDataMaterialReferenceTree',
         'buildReferenceTree', 'buildNonSynthSourceTree',
+        'getEmpiricalRecipeEstimate',
         'getRecipeTargetSuccessRate', 'getDeltaProb',
         'buildLevelToCandidatesMapping', 'getRecipeOutcomeBreakdown',
         'getAlternativeNames', 'getAlchemyResultCandidatesMulti',
@@ -2122,7 +2262,8 @@ var alchemy_core = {
         'getSingleAttribute', 'getSafeJunkMaterials', 'getSafeJunkDescription',
         'findLowestAlchemyFlag3Item',
         'simplifyRecipeSlot2', 'getRecipeDesc', 'isStrictlyCraftOnly',
-        'getAlchemyBaseBonus', 'getJumpPenalty'
+        'getAlchemyBaseBonus', 'getJumpPenalty',
+        'setDisplayEquipmentIds', 'getDisplayEquipmentIds', 'isDisplayEquipment'
     ];
 
     for (var i = 0; i < _exportNames.length; i++) {
